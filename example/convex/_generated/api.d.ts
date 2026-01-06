@@ -49,5 +49,5 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  sampleComponent: import("@example/sample-component/_generated/component.js").ComponentApi<"sampleComponent">;
+  authz: import("@dbjpanda/convex-authz/_generated/component.js").ComponentApi<"authz">;
 };
