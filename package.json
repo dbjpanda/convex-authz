@@ -1,7 +1,10 @@
 {
   "name": "@dbjpanda/convex-authz",
   "description": "A comprehensive RBAC/ABAC/ReBAC authorization component for Convex with O(1) indexed lookups, inspired by Google Zanzibar",
-  "repository": "github:dbjpanda/convex-authz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dbjpanda/convex-authz.git"
+  },
   "homepage": "https://github.com/dbjpanda/convex-authz#readme",
   "bugs": {
     "url": "https://github.com/dbjpanda/convex-authz/issues"
