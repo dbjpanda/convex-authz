@@ -1,8 +1,8 @@
-# @convex-dev/authz
+# @dbjpanda/convex-authz
 
 A comprehensive **RBAC/ABAC/ReBAC** authorization component for [Convex](https://convex.dev) with **O(1) indexed lookups**, inspired by [Google Zanzibar](https://research.google/pubs/pub48190/).
 
-[![npm version](https://badge.fury.io/js/@convex-dev%2Fauthz.svg)](https://www.npmjs.com/package/@convex-dev/authz)
+[![npm version](https://badge.fury.io/js/@dbjpanda%2Fconvex-authz.svg)](https://www.npmjs.com/package/@dbjpanda/convex-authz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
@@ -20,7 +20,7 @@ A comprehensive **RBAC/ABAC/ReBAC** authorization component for [Convex](https:/
 ## Installation
 
 ```bash
-npm install @convex-dev/authz
+npm install @dbjpanda/convex-authz
 ```
 
 ## Quick Start
@@ -30,7 +30,7 @@ npm install @convex-dev/authz
 ```typescript
 // convex/convex.config.ts
 import { defineApp } from "convex/server";
-import authz from "@convex-dev/authz/convex.config";
+import authz from "@dbjpanda/convex-authz/convex.config";
 
 const app = defineApp();
 app.use(authz);
@@ -42,7 +42,7 @@ export default app;
 
 ```typescript
 // convex/authz.ts
-import { Authz, definePermissions, defineRoles } from "@convex-dev/authz";
+import { Authz, definePermissions, defineRoles } from "@dbjpanda/convex-authz";
 import { components } from "./_generated/api";
 
 // Step 1: Define your permissions
@@ -116,7 +116,7 @@ export const updateDocument = mutation({
 For production workloads, use `IndexedAuthz` for instant permission checks:
 
 ```typescript
-import { IndexedAuthz } from "@convex-dev/authz";
+import { IndexedAuthz } from "@dbjpanda/convex-authz";
 
 const authz = new IndexedAuthz(components.authz, {
   permissions,
@@ -227,7 +227,7 @@ Use with `convex-test`:
 
 ```typescript
 import { convexTest } from "convex-test";
-import authzTest from "@convex-dev/authz/test";
+import authzTest from "@dbjpanda/convex-authz/test";
 import { test } from "vitest";
 
 test("authorization test", async () => {
@@ -251,7 +251,7 @@ This component implements key concepts from Google's Zanzibar authorization syst
 
 ## Comparison
 
-| Feature | @convex-dev/authz | OpenFGA | Oso |
+| Feature | @dbjpanda/convex-authz | OpenFGA | Oso |
 |---------|------------------|---------|-----|
 | RBAC | ✅ | ✅ | ✅ |
 | ABAC | ✅ | ⚠️ | ✅ |

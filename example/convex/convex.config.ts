@@ -1,5 +1,5 @@
 import { defineApp } from "convex/server";
-import authz from "@convex-dev/authz/convex.config.js";
+import authz from "@dbjpanda/convex-authz/convex.config.js";
 
 const app = defineApp();
 app.use(authz);

@@ -1,4 +1,4 @@
-import { GenericQueryCtx, GenericDataModel } from "convex/server";
+import type { GenericQueryCtx, GenericDataModel } from "convex/server";
 
 /**
  * Role hierarchy levels for comparison

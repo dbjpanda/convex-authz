@@ -8,7 +8,11 @@
  * @module
  */
 
-import type * as lib from "../lib.js";
+import type * as helpers from "../helpers.js";
+import type * as indexed from "../indexed.js";
+import type * as mutations from "../mutations.js";
+import type * as queries from "../queries.js";
+import type * as rebac from "../rebac.js";
 
 import type {
   ApiFromModules,
@@ -18,7 +22,11 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
-  lib: typeof lib;
+  helpers: typeof helpers;
+  indexed: typeof indexed;
+  mutations: typeof mutations;
+  queries: typeof queries;
+  rebac: typeof rebac;
 }> = anyApi as any;
 
 /**

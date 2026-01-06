@@ -1,5 +1,5 @@
 {
-  "name": "@convex-dev/authz",
+  "name": "@dbjpanda/convex-authz",
   "description": "A comprehensive RBAC/ABAC/ReBAC authorization component for Convex with O(1) indexed lookups, inspired by Google Zanzibar",
   "repository": "github:dbjpanda/convex-authz",
   "homepage": "https://github.com/dbjpanda/convex-authz#readme",

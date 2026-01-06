@@ -5,7 +5,7 @@
  */
 import { mutation, query } from "./_generated/server.js";
 import { components } from "./_generated/api.js";
-import { Authz, definePermissions, defineRoles } from "@convex-dev/authz";
+import { Authz, definePermissions, defineRoles } from "@dbjpanda/convex-authz";
 import { v } from "convex/values";
 import { Auth } from "convex/server";
 
