@@ -13,35 +13,37 @@ If this is your first time, here are the recommended steps:
    latter, ensure you have an npmjs account with permissions to push to
    `my-org`.
 2. `npm login` to login to npmjs.
-3. `npm run clean` to clean your `/dist` directory.
-4. `npm ci` to install the dependencies with the versions specified in
+3. `npm ci` to install the dependencies with the versions specified in
    `package-lock.json`.
-5. `npm run build` to build the package fresh.
-6. (Optional) `npm run typecheck` to typecheck the package.
-7. (Optional) `npm run lint` to lint the package.
-8. (Optional) `npm run test` to test the package.
-9. (Optional) `npm pack` will create a .tgz file of the package. You can then
+4. (Optional) `npm run build` to test building the package.
+5. (Optional) `npm run typecheck` to typecheck the package.
+6. (Optional) `npm run lint` to lint the package.
+7. (Optional) `npm run test` to test the package.
+8. (Optional) `npm pack` will create a .tgz file of the package. You can then
    try installing it in another project with
    `npm install ./path/to/your-package.tgz` to sanity check that it works as
    expected. You can remove the .tgz file after.
-10. `npm publish --access public` to publish the package to npm.
-11. `git tag v0.1.0` to tag the new version.
-12. `git push --follow-tags` to push the tags to the repository. This way, other
+9. `npm publish --access public` to publish the package to npm. The
+   `prepublishOnly` script will automatically build the package before
+   publishing.
+10. `git tag v0.1.0` to tag the new version.
+11. `git push --follow-tags` to push the tags to the repository. This way, other
     contributors can always see what code was published with each version.
     Running `npm version ...` will create these tags and commits automatically.
 
 After the initial publish, you can use the release scripts documented below,
-which will do steps 3-12 automatically (except the sanity check in step 9).
+which will do steps 3-11 automatically (except the sanity check in step 8).
 
 ## Package scripts for releasing
 
 In package.json, there are some scripts that are useful for doing releases.
 
+- `prepublishOnly` will build the package before publishing. This ensures the
+  `/dist` directory is always up-to-date when publishing to npm.
 - `preversion` will run the tests and typecheck the code before marking a new
   version.
 - `version` will open the changelog in vim and then save it before committing
   the new version.
-- `prepublishOnly` will make a clean build of the package before publishing.
 
 These are not required and can be modified or removed if desired. They will all
 be run automatically when using one of the deployment commands.
@@ -75,7 +77,6 @@ git push --follow-tags
 ## Building a one-off package
 
 ```sh
-npm run clean
 npm run build
 npm pack
 ```
