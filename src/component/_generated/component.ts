@@ -11,115 +11,332 @@
 import type { FunctionReference } from "convex/server";
 
 /**
- * Scope type for resource-level permissions
- */
-type Scope = { type: string; id: string };
-
-/**
- * A utility for referencing the Authz component's exposed API.
+ * A utility for referencing a Convex component's exposed API.
  *
+ * Useful when expecting a parameter like `components.myComponent`.
  * Usage:
  * ```ts
  * async function myFunction(ctx: QueryCtx, component: ComponentApi) {
- *   return ctx.runQuery(component.queries.checkPermission, { ...args });
+ *   return ctx.runQuery(component.someFile.someQuery, { ...args });
  * }
  * ```
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
-    queries: {
-      getUserRoles: FunctionReference<
-        "query",
-        "public",
-        { userId: string; scope?: Scope },
-        Array<{
-          _id: string;
-          role: string;
-          scope?: Scope;
-          metadata?: any;
-          expiresAt?: number;
-        }>,
+    indexed: {
+      addRelationWithCompute: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          createdBy?: string;
+          inheritedRelations?: Array<{
+            fromObjectType: string;
+            fromRelation: string;
+            relation: string;
+          }>;
+          objectId: string;
+          objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
+        },
+        string,
         Name
       >;
-      hasRole: FunctionReference<
+      assignRoleWithCompute: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          assignedBy?: string;
+          expiresAt?: number;
+          role: string;
+          rolePermissions: Array<string>;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        string,
+        Name
+      >;
+      checkPermissionFast: FunctionReference<
         "query",
-        "public",
-        { userId: string; role: string; scope?: Scope },
+        "internal",
+        {
+          objectId?: string;
+          objectType?: string;
+          permission: string;
+          userId: string;
+        },
         boolean,
         Name
       >;
-      getUserAttributes: FunctionReference<
-        "query",
-        "public",
-        { userId: string },
-        Array<{ _id: string; key: string; value: any }>,
+      cleanupExpired: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        { expiredPermissions: number; expiredRoles: number },
         Name
       >;
-      getUserAttribute: FunctionReference<
-        "query",
-        "public",
-        { userId: string; key: string },
-        any,
-        Name
-      >;
-      getPermissionOverrides: FunctionReference<
-        "query",
-        "public",
-        { userId: string; permission?: string },
-        Array<{
-          _id: string;
-          permission: string;
-          effect: "allow" | "deny";
-          scope?: Scope;
-          reason?: string;
+      denyPermissionDirect: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          deniedBy?: string;
           expiresAt?: number;
+          permission: string;
+          reason?: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        string,
+        Name
+      >;
+      getUserPermissionsFast: FunctionReference<
+        "query",
+        "internal",
+        { scopeKey?: string; userId: string },
+        Array<{
+          effect: string;
+          permission: string;
+          scopeKey: string;
+          sources: Array<string>;
         }>,
         Name
       >;
+      getUserRolesFast: FunctionReference<
+        "query",
+        "internal",
+        { scopeKey?: string; userId: string },
+        Array<{
+          role: string;
+          scope?: { id: string; type: string };
+          scopeKey: string;
+        }>,
+        Name
+      >;
+      grantPermissionDirect: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          expiresAt?: number;
+          grantedBy?: string;
+          permission: string;
+          reason?: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        string,
+        Name
+      >;
+      hasRelationFast: FunctionReference<
+        "query",
+        "internal",
+        {
+          objectId: string;
+          objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
+        },
+        boolean,
+        Name
+      >;
+      hasRoleFast: FunctionReference<
+        "query",
+        "internal",
+        {
+          objectId?: string;
+          objectType?: string;
+          role: string;
+          userId: string;
+        },
+        boolean,
+        Name
+      >;
+      removeRelationWithCompute: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          objectId: string;
+          objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
+        },
+        boolean,
+        Name
+      >;
+      revokeRoleWithCompute: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          role: string;
+          rolePermissions: Array<string>;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        boolean,
+        Name
+      >;
+    };
+    mutations: {
+      assignRole: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          assignedBy?: string;
+          enableAudit?: boolean;
+          expiresAt?: number;
+          metadata?: any;
+          role: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        string,
+        Name
+      >;
+      cleanupExpired: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        { expiredOverrides: number; expiredRoles: number },
+        Name
+      >;
+      denyPermission: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          createdBy?: string;
+          enableAudit?: boolean;
+          expiresAt?: number;
+          permission: string;
+          reason?: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        string,
+        Name
+      >;
+      grantPermission: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          createdBy?: string;
+          enableAudit?: boolean;
+          expiresAt?: number;
+          permission: string;
+          reason?: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        string,
+        Name
+      >;
+      logPermissionCheck: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          permission: string;
+          reason?: string;
+          result: boolean;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        null,
+        Name
+      >;
+      removeAllAttributes: FunctionReference<
+        "mutation",
+        "internal",
+        { enableAudit?: boolean; removedBy?: string; userId: string },
+        number,
+        Name
+      >;
+      removeAttribute: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enableAudit?: boolean;
+          key: string;
+          removedBy?: string;
+          userId: string;
+        },
+        boolean,
+        Name
+      >;
+      removePermissionOverride: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enableAudit?: boolean;
+          permission: string;
+          removedBy?: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        boolean,
+        Name
+      >;
+      revokeAllRoles: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enableAudit?: boolean;
+          revokedBy?: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        number,
+        Name
+      >;
+      revokeRole: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enableAudit?: boolean;
+          revokedBy?: string;
+          role: string;
+          scope?: { id: string; type: string };
+          userId: string;
+        },
+        boolean,
+        Name
+      >;
+      setAttribute: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enableAudit?: boolean;
+          key: string;
+          setBy?: string;
+          userId: string;
+          value: any;
+        },
+        string,
+        Name
+      >;
+    };
+    queries: {
       checkPermission: FunctionReference<
         "query",
-        "public",
+        "internal",
         {
-          userId: string;
           permission: string;
-          scope?: Scope;
-          rolePermissions: Record<string, string[]>;
+          rolePermissions: Record<string, Array<string>>;
+          scope?: { id: string; type: string };
+          userId: string;
         },
         {
           allowed: boolean;
-          reason: string;
-          matchedRole?: string;
           matchedOverride?: string;
+          matchedRole?: string;
+          reason: string;
         },
-        Name
-      >;
-      getEffectivePermissions: FunctionReference<
-        "query",
-        "public",
-        {
-          userId: string;
-          rolePermissions: Record<string, string[]>;
-          scope?: Scope;
-        },
-        {
-          permissions: string[];
-          roles: string[];
-          deniedPermissions: string[];
-        },
-        Name
-      >;
-      getUsersWithRole: FunctionReference<
-        "query",
-        "public",
-        { role: string; scope?: Scope },
-        Array<{ userId: string; assignedAt: number; expiresAt?: number }>,
         Name
       >;
       getAuditLog: FunctionReference<
         "query",
-        "public",
+        "internal",
         {
-          userId?: string;
           action?:
             | "permission_check"
             | "role_assigned"
@@ -129,280 +346,85 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "attribute_set"
             | "attribute_removed";
           limit?: number;
+          userId?: string;
         },
         Array<{
           _id: string;
-          timestamp: number;
           action: string;
-          userId: string;
           actorId?: string;
           details: any;
+          timestamp: number;
+          userId: string;
         }>,
         Name
       >;
-    };
-    mutations: {
-      assignRole: FunctionReference<
-        "mutation",
-        "public",
+      getEffectivePermissions: FunctionReference<
+        "query",
+        "internal",
         {
+          rolePermissions: Record<string, Array<string>>;
+          scope?: { id: string; type: string };
           userId: string;
-          role: string;
-          scope?: Scope;
+        },
+        {
+          deniedPermissions: Array<string>;
+          permissions: Array<string>;
+          roles: Array<string>;
+        },
+        Name
+      >;
+      getPermissionOverrides: FunctionReference<
+        "query",
+        "internal",
+        { permission?: string; userId: string },
+        Array<{
+          _id: string;
+          effect: "allow" | "deny";
+          expiresAt?: number;
+          permission: string;
+          reason?: string;
+          scope?: { id: string; type: string };
+        }>,
+        Name
+      >;
+      getUserAttribute: FunctionReference<
+        "query",
+        "internal",
+        { key: string; userId: string },
+        null | any,
+        Name
+      >;
+      getUserAttributes: FunctionReference<
+        "query",
+        "internal",
+        { userId: string },
+        Array<{ _id: string; key: string; value: any }>,
+        Name
+      >;
+      getUserRoles: FunctionReference<
+        "query",
+        "internal",
+        { scope?: { id: string; type: string }; userId: string },
+        Array<{
+          _id: string;
+          expiresAt?: number;
           metadata?: any;
-          assignedBy?: string;
-          expiresAt?: number;
-          enableAudit?: boolean;
-        },
-        string,
-        Name
-      >;
-      revokeRole: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
           role: string;
-          scope?: Scope;
-          revokedBy?: string;
-          enableAudit?: boolean;
-        },
-        boolean,
+          scope?: { id: string; type: string };
+        }>,
         Name
       >;
-      revokeAllRoles: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          scope?: Scope;
-          revokedBy?: string;
-          enableAudit?: boolean;
-        },
-        number,
-        Name
-      >;
-      setAttribute: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          key: string;
-          value: any;
-          setBy?: string;
-          enableAudit?: boolean;
-        },
-        string,
-        Name
-      >;
-      removeAttribute: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          key: string;
-          removedBy?: string;
-          enableAudit?: boolean;
-        },
-        boolean,
-        Name
-      >;
-      removeAllAttributes: FunctionReference<
-        "mutation",
-        "public",
-        { userId: string; removedBy?: string; enableAudit?: boolean },
-        number,
-        Name
-      >;
-      grantPermission: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          permission: string;
-          scope?: Scope;
-          reason?: string;
-          createdBy?: string;
-          expiresAt?: number;
-          enableAudit?: boolean;
-        },
-        string,
-        Name
-      >;
-      denyPermission: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          permission: string;
-          scope?: Scope;
-          reason?: string;
-          createdBy?: string;
-          expiresAt?: number;
-          enableAudit?: boolean;
-        },
-        string,
-        Name
-      >;
-      removePermissionOverride: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          permission: string;
-          scope?: Scope;
-          removedBy?: string;
-          enableAudit?: boolean;
-        },
-        boolean,
-        Name
-      >;
-      logPermissionCheck: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          permission: string;
-          result: boolean;
-          scope?: Scope;
-          reason?: string;
-        },
-        null,
-        Name
-      >;
-      cleanupExpired: FunctionReference<
-        "mutation",
-        "public",
-        {},
-        { expiredRoles: number; expiredOverrides: number },
-        Name
-      >;
-    };
-    indexed: {
-      checkPermissionFast: FunctionReference<
+      getUsersWithRole: FunctionReference<
         "query",
-        "public",
-        { userId: string; permission: string; objectType?: string; objectId?: string },
-        boolean,
+        "internal",
+        { role: string; scope?: { id: string; type: string } },
+        Array<{ assignedAt: number; expiresAt?: number; userId: string }>,
         Name
       >;
-      hasRoleFast: FunctionReference<
+      hasRole: FunctionReference<
         "query",
-        "public",
-        { userId: string; role: string; objectType?: string; objectId?: string },
-        boolean,
-        Name
-      >;
-      hasRelationFast: FunctionReference<
-        "query",
-        "public",
-        {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
-        },
-        boolean,
-        Name
-      >;
-      getUserPermissionsFast: FunctionReference<
-        "query",
-        "public",
-        { userId: string; scopeKey?: string },
-        Array<{ permission: string; effect: string; sources: string[] }>,
-        Name
-      >;
-      getUserRolesFast: FunctionReference<
-        "query",
-        "public",
-        { userId: string; scopeKey?: string },
-        Array<{ role: string; scopeKey: string }>,
-        Name
-      >;
-      assignRoleWithCompute: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          role: string;
-          rolePermissions: string[];
-          scope?: Scope;
-          expiresAt?: number;
-          assignedBy?: string;
-        },
-        string,
-        Name
-      >;
-      revokeRoleWithCompute: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          role: string;
-          rolePermissions: string[];
-          scope?: Scope;
-        },
-        boolean,
-        Name
-      >;
-      grantPermissionDirect: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          permission: string;
-          scope?: Scope;
-          reason?: string;
-          grantedBy?: string;
-          expiresAt?: number;
-        },
-        string,
-        Name
-      >;
-      denyPermissionDirect: FunctionReference<
-        "mutation",
-        "public",
-        {
-          userId: string;
-          permission: string;
-          scope?: Scope;
-          reason?: string;
-          deniedBy?: string;
-          expiresAt?: number;
-        },
-        string,
-        Name
-      >;
-      addRelationWithCompute: FunctionReference<
-        "mutation",
-        "public",
-        {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
-          inheritedRelations?: Array<{
-            relation: string;
-            fromObjectType: string;
-            fromRelation: string;
-          }>;
-          createdBy?: string;
-        },
-        string,
-        Name
-      >;
-      removeRelationWithCompute: FunctionReference<
-        "mutation",
-        "public",
-        {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
-        },
+        "internal",
+        { role: string; scope?: { id: string; type: string }; userId: string },
         boolean,
         Name
       >;
@@ -410,103 +432,101 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     rebac: {
       addRelation: FunctionReference<
         "mutation",
-        "public",
+        "internal",
         {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
           createdBy?: string;
+          objectId: string;
+          objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
         },
         string,
         Name
       >;
-      removeRelation: FunctionReference<
-        "mutation",
-        "public",
-        {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
-        },
-        boolean,
-        Name
-      >;
-      hasDirectRelation: FunctionReference<
+      checkRelationWithTraversal: FunctionReference<
         "query",
-        "public",
+        "internal",
         {
-          subjectType: string;
+          maxDepth?: number;
+          objectId: string;
+          objectType: string;
+          relation: string;
           subjectId: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
+          subjectType: string;
+          traversalRules?: any;
         },
-        boolean,
-        Name
-      >;
-      getSubjectRelations: FunctionReference<
-        "query",
-        "public",
-        { subjectType: string; subjectId: string; relation?: string },
-        Array<{
-          _id: string;
-          relation: string;
-          objectType: string;
-          objectId: string;
-        }>,
+        { allowed: boolean; path: Array<string>; reason: string },
         Name
       >;
       getObjectRelations: FunctionReference<
         "query",
-        "public",
-        { objectType: string; objectId: string; relation?: string },
+        "internal",
+        { objectId: string; objectType: string; relation?: string },
         Array<{
           _id: string;
-          subjectType: string;
+          relation: string;
           subjectId: string;
+          subjectType: string;
+        }>,
+        Name
+      >;
+      getSubjectRelations: FunctionReference<
+        "query",
+        "internal",
+        { objectType?: string; subjectId: string; subjectType: string },
+        Array<{
+          _id: string;
+          objectId: string;
+          objectType: string;
           relation: string;
         }>,
         Name
       >;
-      checkRelationWithTraversal: FunctionReference<
+      hasDirectRelation: FunctionReference<
         "query",
-        "public",
+        "internal",
         {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
-          objectType: string;
           objectId: string;
-          traversalRules: Record<
-            string,
-            Array<{ through: string; via: string; inherit: string }>
-          >;
-          maxDepth?: number;
+          objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
         },
-        { allowed: boolean; path?: string[]; reason?: string },
+        boolean,
         Name
       >;
       listAccessibleObjects: FunctionReference<
         "query",
-        "public",
+        "internal",
         {
-          subjectType: string;
-          subjectId: string;
-          relation: string;
           objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
+          traversalRules?: any;
         },
-        Array<{ objectId: string }>,
+        Array<{ objectId: string; via: string }>,
         Name
       >;
       listUsersWithAccess: FunctionReference<
         "query",
-        "public",
-        { objectType: string; objectId: string; relation: string },
-        Array<{ userId: string }>,
+        "internal",
+        { objectId: string; objectType: string; relation: string },
+        Array<{ userId: string; via: string }>,
+        Name
+      >;
+      removeRelation: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          objectId: string;
+          objectType: string;
+          relation: string;
+          subjectId: string;
+          subjectType: string;
+        },
+        boolean,
         Name
       >;
     };
