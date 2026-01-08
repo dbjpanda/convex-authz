@@ -49,5 +49,5 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  authz: import("@dbjpanda/convex-authz/_generated/component.js").ComponentApi<"authz">;
+  authz: import("@djpanda/convex-authz/_generated/component.js").ComponentApi<"authz">;
 };

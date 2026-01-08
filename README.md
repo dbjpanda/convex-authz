@@ -1,8 +1,8 @@
-# @dbjpanda/convex-authz
+# @djpanda/convex-authz
 
 A comprehensive, production-ready authorization component for [Convex](https://convex.dev) featuring **RBAC**, **ABAC**, and **ReBAC** with **O(1) indexed lookups**, inspired by [Google Zanzibar](https://research.google/pubs/pub48190/).
 
-[![npm version](https://badge.fury.io/js/@dbjpanda%2Fconvex-authz.svg)](https://www.npmjs.com/package/@dbjpanda/convex-authz)
+[![npm version](https://badge.fury.io/js/@djpanda%2Fconvex-authz.svg)](https://www.npmjs.com/package/@djpanda/convex-authz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
@@ -38,7 +38,7 @@ A comprehensive, production-ready authorization component for [Convex](https://c
 ## Installation
 
 ```bash
-npm install @dbjpanda/convex-authz
+npm install @djpanda/convex-authz
 ```
 
 ---
@@ -50,7 +50,7 @@ npm install @dbjpanda/convex-authz
 ```typescript
 // convex/convex.config.ts
 import { defineApp } from "convex/server";
-import authz from "@dbjpanda/convex-authz/convex.config";
+import authz from "@djpanda/convex-authz/convex.config";
 
 const app = defineApp();
 app.use(authz);
@@ -62,7 +62,7 @@ export default app;
 
 ```typescript
 // convex/authz.ts
-import { Authz, definePermissions, defineRoles } from "@dbjpanda/convex-authz";
+import { Authz, definePermissions, defineRoles } from "@djpanda/convex-authz";
 import { components } from "./_generated/api";
 
 // Step 1: Define permissions
@@ -132,7 +132,7 @@ export const updateDocument = mutation({
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           @dbjpanda/convex-authz                            │
+│                           @djpanda/convex-authz                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐   │
@@ -241,7 +241,7 @@ const attributes = await authz.getUserAttributes(ctx, userId);
 ### Defining Policies
 
 ```typescript
-import { definePolicies } from "@dbjpanda/convex-authz";
+import { definePolicies } from "@djpanda/convex-authz";
 
 const policies = definePolicies({
   "documents:update": {
@@ -401,7 +401,7 @@ For high-performance production use, the indexed system pre-computes permissions
 ### Using the Indexed API
 
 ```typescript
-import { IndexedAuthz } from "@dbjpanda/convex-authz";
+import { IndexedAuthz } from "@djpanda/convex-authz";
 import { components } from "./_generated/api";
 
 const authz = new IndexedAuthz(components.authz, { permissions, roles });
@@ -698,7 +698,7 @@ This component implements concepts from [Google Zanzibar](https://research.googl
 
 ## Comparison with Other Solutions
 
-| Feature | @dbjpanda/convex-authz | OpenFGA | Oso | Cerbos |
+| Feature | @djpanda/convex-authz | OpenFGA | Oso | Cerbos |
 |---------|------------------------|---------|-----|--------|
 | RBAC | ✅ | ✅ | ✅ | ✅ |
 | ABAC | ✅ | ⚠️ Limited | ✅ | ✅ |

@@ -85,7 +85,7 @@ function AuthzDemo() {
 function App() {
   return (
     <>
-      <h1>@dbjpanda/convex-authz Demo</h1>
+      <h1>@djpanda/convex-authz Demo</h1>
       <div className="card">
         <AuthzDemo />
         <p style={{ color: "#666", fontSize: "0.9rem" }}>

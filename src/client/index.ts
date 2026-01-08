@@ -1,12 +1,12 @@
 /**
- * @dbjpanda/convex-authz - Authorization Component for Convex
+ * @djpanda/convex-authz - Authorization Component for Convex
  *
  * A comprehensive RBAC/ABAC/ReBAC authorization component featuring
  * O(1) indexed lookups, inspired by Google Zanzibar.
  *
  * @example
  * ```typescript
- * import { Authz, definePermissions, defineRoles } from "@dbjpanda/convex-authz";
+ * import { Authz, definePermissions, defineRoles } from "@djpanda/convex-authz";
  * import { components } from "./_generated/api";
  *
  * const permissions = definePermissions({
