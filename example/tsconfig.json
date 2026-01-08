@@ -11,7 +11,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@convex/*": ["./convex/*"]
+    }
   },
-  "include": ["./src", "vite.config.ts"]
+  "include": ["./src", "./convex", "vite.config.ts"]
 }
