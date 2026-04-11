@@ -1,0 +1,43 @@
+name: Check SKILL.md sync
+
+# Verifies that skills/convex-authz/SKILL.md is in sync with README.md.
+# If README.md changes, the author must run `bash scripts/sync-skill.sh`
+# locally and commit the regenerated SKILL.md as part of their PR.
+#
+# This replaces a post-merge bot push (which branch protection rules block)
+# with a PR-time check that shifts the work left to the author.
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "README.md"
+      - "scripts/sync-skill.sh"
+      - "skills/convex-authz/SKILL.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-skill-sync-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Verify SKILL.md in sync with README.md
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate SKILL.md
+        run: bash scripts/sync-skill.sh
+
+      - name: Fail if SKILL.md is stale
+        run: |
+          if ! git diff --quiet HEAD -- skills/convex-authz/SKILL.md; then
+            echo "::error::skills/convex-authz/SKILL.md is out of sync with README.md."
+            echo "Run 'bash scripts/sync-skill.sh' locally and commit the result."
+            git diff HEAD -- skills/convex-authz/SKILL.md
+            exit 1
+          fi
+          echo "SKILL.md is in sync with README.md."

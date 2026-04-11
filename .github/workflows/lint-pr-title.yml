@@ -1,0 +1,43 @@
+name: Lint PR title
+
+# Validates that pull request titles follow Conventional Commits.
+# release-please reads squash-merge commit messages (which take the PR title)
+# to decide version bumps, so the title IS the versioning contract.
+#
+# Uses `pull_request` (not `pull_request_target`) so the check runs from the
+# workflow file on the PR's head branch. Safe because: no secrets are used,
+# the repo has no external forks, and the check only reads the PR title.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: lint-pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          validateSingleCommit: false
