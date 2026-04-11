@@ -3,9 +3,13 @@ name: Lint PR title
 # Validates that pull request titles follow Conventional Commits.
 # release-please reads squash-merge commit messages (which take the PR title)
 # to decide version bumps, so the title IS the versioning contract.
+#
+# Uses `pull_request` (not `pull_request_target`) so the check runs from the
+# workflow file on the PR's head branch. Safe because: no secrets are used,
+# the repo has no external forks, and the check only reads the PR title.
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, edited, synchronize, reopened]
 
 permissions:
