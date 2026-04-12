@@ -4,6 +4,8 @@
     ".": {
       "release-type": "node",
       "package-name": "@djpanda/convex-authz",
+      "component": "convex-authz",
+      "include-component-in-tag": false,
       "include-v-in-tag": true,
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false,
