@@ -16,3 +16,4 @@ node_modules
 .claude/settings.local.json
 coverage/
 .vercel
+.remember
