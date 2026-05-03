@@ -12,7 +12,6 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@convex/*": ["./convex/*"]

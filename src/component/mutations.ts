@@ -553,7 +553,11 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function getOptionalEnvNumber(name: string): number | undefined {
   try {
-    const env = typeof process !== "undefined" ? process.env : undefined;
+    const g = globalThis as Record<string, unknown>;
+    const proc = g["process"] as
+      | { env: Record<string, string | undefined> }
+      | undefined;
+    const env = proc?.env;
     const raw = env && (env[name] as string | undefined);
     if (raw === undefined || raw === "") return undefined;
     const n = parseInt(String(raw), 10);
