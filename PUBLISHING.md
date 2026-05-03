@@ -1,84 +1,211 @@
 # Publishing
 
-In order for other people to install and use this component, you can publish the
-package to npm.
+Releases for `@djpanda/convex-authz` are **fully automated**. You do not run
+`npm publish`, you do not bump the version, you do not edit the changelog, and
+you do not need an npm token. Merging a Conventional Commit PR into `main` is
+the entire interface.
 
-You will first need to have an npmjs account with permissions to push to your
-package name.
+This document explains how the pipeline works, what your responsibilities are,
+and how to recover when something goes wrong.
 
-If this is your first time, here are the recommended steps:
+## TL;DR
 
-1. Ensure the package.json "name" matches what you want it to be called. It
-   should either be like `my-package` or `@my-org/my-package`. If it's the
-   latter, ensure you have an npmjs account with permissions to push to
-   `my-org`.
-2. `npm login` to login to npmjs.
-3. `npm run clean` to clean your `/dist` directory.
-4. `npm ci` to install the dependencies with the versions specified in
-   `package-lock.json`.
-5. `npm run build` to build the package fresh.
-6. (Optional) `npm run typecheck` to typecheck the package.
-7. (Optional) `npm run lint` to lint the package.
-8. (Optional) `npm run test` to test the package.
-9. (Optional) `npm pack` will create a .tgz file of the package. You can then
-   try installing it in another project with
-   `npm install ./path/to/your-package.tgz` to sanity check that it works as
-   expected. You can remove the .tgz file after.
-10. `npm publish --access public` to publish the package to npm.
-11. `git tag v0.1.0` to tag the new version.
-12. `git push --follow-tags` to push the tags to the repository. This way, other
-    contributors can always see what code was published with each version.
-    Running `npm version ...` will create these tags and commits automatically.
-
-After the initial publish, you can use the release scripts documented below,
-which will do steps 3-12 automatically (except the sanity check in step 9).
-
-## Package scripts for releasing
-
-In package.json, there are some scripts that are useful for doing releases.
-
-- `preversion` will run the tests and typecheck the code before marking a new
-  version.
-- `version` will open the changelog in vim and then save it before committing
-  the new version.
-- `prepublishOnly` will make a clean build of the package before publishing.
-
-These are not required and can be modified or removed if desired. They will all
-be run automatically when using one of the deployment commands.
-
-## Deploying a new alpha version
-
-```sh
-npm run alpha
+```
+dev branch  →  PR to main (Conventional Commit title)  →  squash merge
+            →  release-please opens a "release PR" on main
+            →  squash merge that release PR
+            →  tag + GitHub Release + npm publish (via OIDC)
 ```
 
-This will create a prerelease version with an `@alpha` tag. It will then publish
-the package to npm and push the code and new tag. Users can install the package
-with `npm install @your-package@alpha`.
+You touch only the first two arrows. The rest is automatic.
 
-## Deploying a new release version
+## The release flow in detail
+
+### 1. Develop on `dev`
+
+Push freely to `dev`. No release machinery fires on `dev` pushes — only PRs
+trigger CI (`test.yml`).
+
+### 2. Open a PR from `dev` to `main`
+
+The **PR title must follow Conventional Commits**. This is enforced by
+`.github/workflows/lint-pr-title.yml` and is non-negotiable: the PR title
+becomes the squash-merge commit message on `main`, and that message is what
+release-please reads to compute the next version.
+
+Allowed types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`,
+`ci`, `chore`.
+
+| PR title example | Effect on next version |
+| --- | --- |
+| `fix: handle empty scope in checkPermission` | patch bump (e.g. `2.2.0` → `2.2.1`) |
+| `feat: add caveat support to ABAC policies` | minor bump (`2.2.0` → `2.3.0`) |
+| `feat!: rename Authz.can() → Authz.check()` | major bump (`2.2.0` → `3.0.0`) |
+| `fix!: change return shape of getUserRoles` | major bump |
+| `chore: bump deps`, `ci: pin action versions` | no version bump |
+| `docs: clarify ReBAC traversal` | no version bump (hidden in changelog) |
+
+The `!` after the type is the breaking-change signal. You can also include a
+`BREAKING CHANGE:` footer in the PR body for the same effect.
+
+While the PR is open, `test.yml` runs `npx pkg-pr-new publish` on every push,
+which posts a comment with a try-before-merge install URL:
 
 ```sh
-npm run release
+npm install https://pkg.pr.new/dbjpanda/convex-authz@<sha>
 ```
 
-This will create a patch version and publish as `latest`. It will then publish
-the package to npm and push the code and new tag. To publish a new minor or
-major version, you can run the commands manually:
+Useful for sanity-checking the change in a downstream project before merging.
+
+### 3. Squash-merge the PR
+
+Always **squash merge** PRs into `main`. This collapses your commits into a
+single commit whose message is the PR title — preserving the Conventional
+Commit contract that release-please depends on.
+
+The squash merge to `main` triggers `release-please.yml`, which:
+
+- Reads commits since the last release tag
+- Computes the next version from the commit types
+- Opens (or updates) a **release PR** on `main` titled
+  `chore(main): release convex-authz X.Y.Z`
+- That PR contains the `package.json` bump, the `.release-please-manifest.json`
+  bump, and the regenerated `CHANGELOG.md` section
+
+The release PR stays open and continuously updates as you merge more PRs into
+`main`. Nothing is published yet.
+
+### 4. Merge the release PR when you want to ship
+
+When you are ready to release, squash-merge the release PR. This re-runs
+`release-please.yml`, which this time:
+
+- Creates the git tag (e.g. `v2.3.0`)
+- Creates the GitHub Release with auto-generated notes
+- Sets `release_created: true`, which triggers the `publish` job
+- The `publish` job checks out the tag, builds, and runs
+  `npm publish --provenance --access public`
+- Authentication is via **GitHub Actions OIDC**, validated against the
+  trusted publisher configured on npm. No tokens involved.
+
+Within ~1 minute of merging, the new version is on npm with provenance
+attestation linking the tarball back to the exact commit and workflow run.
+
+## What you must NOT do
+
+- Do **not** edit `package.json` `version` manually. release-please owns it.
+- Do **not** edit `CHANGELOG.md` directly. release-please regenerates it.
+- Do **not** push directly to `main`. You'd skip PR title linting and could
+  break release-please's commit parsing.
+- Do **not** create tags manually. release-please creates them.
+- Do **not** run `npm publish` from your laptop. There is no token, and a
+  manual publish would skip the provenance attestation chain.
+- Do **not** add a long-lived `NPM_TOKEN` secret back to the repo. The
+  Trusted Publisher is the auth mechanism now; a token would be a downgrade.
+
+## Configuration reference
+
+### Release-please
+
+- Config: `release-please-config.json` (single package, `@djpanda/convex-authz`)
+- State: `.release-please-manifest.json` (current version)
+- Workflow: `.github/workflows/release-please.yml` (triggers on push to `main`)
+
+Tag format is `v<major>.<minor>.<patch>` (e.g. `v2.3.0`). The component name
+is intentionally omitted from the tag (`include-component-in-tag: false`)
+because this repo ships exactly one package.
+
+### npm Trusted Publisher
+
+The npm package is configured to trust this repo's release-please workflow
+via OpenID Connect. To inspect or modify:
+
+1. Go to https://www.npmjs.com/package/@djpanda/convex-authz/access
+2. The **Trusted Publisher** section shows:
+   - Repository: `dbjpanda/convex-authz`
+   - Workflow: `release-please.yml`
+   - Environment: *(none)*
+3. The **Publishing access** setting can stay on
+   "Require two-factor authentication and disallow tokens (recommended)" —
+   trusted publishers bypass this restriction by design.
+
+### Workflow permissions
+
+The `publish` job in `release-please.yml` declares:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write   # required for npm OIDC + provenance
+```
+
+`id-token: write` is the GitHub-side half of OIDC. Removing it would break
+publishing immediately.
+
+## Emergency: manual publish (break-glass only)
+
+Only use this if OIDC is broken (e.g. npm trusted publishing outage) AND a
+release must ship right now.
+
+1. Generate a short-lived **classic Automation token** at
+   https://www.npmjs.com/settings/dbjpanda/tokens (Automation type bypasses
+   the package's 2FA-required setting).
+2. From a clean checkout of the release tag:
+   ```sh
+   git checkout v<X.Y.Z>
+   npm ci
+   npm run build
+   NODE_AUTH_TOKEN=<token> npm publish --provenance --access public
+   ```
+3. **Immediately delete the token** at the same npm settings page.
+4. Open an issue capturing why OIDC failed so the next maintainer knows.
+
+Note: a manual publish from a developer machine cannot generate the same
+provenance attestation as the GitHub Actions OIDC flow. Downstream consumers
+verifying provenance will see a different signer. Treat this as a last
+resort, not a routine fallback.
+
+## Recovering from a failed publish
+
+If a release PR merges, the tag and GitHub Release are created, but the npm
+`publish` job fails:
+
+1. Diagnose the failure:
+   ```sh
+   gh run list --workflow=release-please.yml --limit 5
+   gh run view <run-id> --log-failed
+   ```
+2. Fix the underlying cause (e.g. flaky test, dependency issue, registry
+   auth misconfiguration).
+3. Re-run only the failed job — do **not** cherry-pick or bump to `X.Y.Z+1`:
+   ```sh
+   gh run rerun <run-id> --failed
+   ```
+4. Confirm the package is on npm:
+   ```sh
+   curl -s https://registry.npmjs.org/@djpanda/convex-authz \
+     | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['dist-tags'])"
+   ```
+
+The git tag and GitHub Release already point to the correct commit; re-running
+the publish job preserves provenance integrity. Bumping the version to "force
+a re-release" would create misleading git history and is not necessary.
+
+## Verifying a published release
+
+After any publish, sanity-check the alignment:
 
 ```sh
-npm version minor # or major
-npm publish
-git push --follow-tags
+# 1. npm latest
+curl -s https://registry.npmjs.org/@djpanda/convex-authz \
+  | python3 -c "import sys, json; print(json.load(sys.stdin)['dist-tags'])"
+
+# 2. Latest GitHub Release
+gh release list --limit 1
+
+# 3. Latest git tag
+git describe --tags --abbrev=0
 ```
 
-## Building a one-off package
-
-```sh
-npm run clean
-npm run build
-npm pack
-```
-
-You can then provide the .tgz file to others to install via
-`npm install ./path/to/your-package.tgz`.
+All three should report the same version. If they diverge, see "Recovering
+from a failed publish" above.
