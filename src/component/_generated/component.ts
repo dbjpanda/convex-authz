@@ -522,6 +522,24 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         string,
         Name
       >;
+      listUserIdsWithRole: FunctionReference<
+        "query",
+        "internal",
+        {
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+          role: string;
+          tenantId: string;
+        },
+        { continueCursor: string; isDone: boolean; userIds: Array<string> },
+        Name
+      >;
       recomputeUser: FunctionReference<
         "mutation",
         "internal",
@@ -610,6 +628,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           value: any;
         },
         string,
+        Name
+      >;
+      syncRoleAction: FunctionReference<
+        "action",
+        "internal",
+        {
+          policyClassifications?: Record<
+            string,
+            null | "allow" | "deny" | "deferred"
+          >;
+          role: string;
+          rolePermissionsMap: Record<string, Array<string>>;
+          tenantId: string;
+        },
+        { usersProcessed: number },
         Name
       >;
     };

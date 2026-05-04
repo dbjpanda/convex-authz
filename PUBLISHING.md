@@ -142,6 +142,40 @@ permissions:
 `id-token: write` is the GitHub-side half of OIDC. Removing it would break
 publishing immediately.
 
+## Configuration migration: changing the tag pattern
+
+Changing the `include-component-in-tag` (or any other tag-shape) field in
+`release-please-config.json` is **retroactive**: release-please's "what was
+the last release" lookup is a tag-pattern scan, not a manifest read. Old
+tags created under the previous pattern stop matching the new pattern and
+become invisible to release-please.
+
+When that happens, release-please falls back to the highest tag that still
+matches the new pattern, treats every commit since then as unreleased, and
+opens a release PR that re-includes commits from already-shipped versions
+(usually with duplicated `feat:` entries — that is the giveaway).
+
+**If you change the tag pattern, you must backfill matching tags for the
+current and recent release(s).** Example (tag-prefix drop, as done in
+PR #29):
+
+```sh
+# The old tag was convex-authz-vX.Y.Z, the new pattern is vX.Y.Z.
+# Backfill v2.2.0 pointing at the same commit as the legacy tag.
+git tag v2.2.0 "$(git rev-parse convex-authz-v2.2.0)"
+git push origin v2.2.0
+```
+
+If you skip this step and merge anything to `main`, release-please will
+open a wrong-version release PR. Do not merge that PR — instead, backfill
+the tag, re-run the release-please workflow, and **manually close** the
+stale PR (release-please does not auto-close PRs it has already created
+when conditions change).
+
+Leave the legacy tag in place. It costs nothing and may be referenced by
+external systems (npm provenance verification, blog posts, archive
+crawlers).
+
 ## Emergency: manual publish (break-glass only)
 
 Only use this if OIDC is broken (e.g. npm trusted publishing outage) AND a
