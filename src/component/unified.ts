@@ -11,7 +11,9 @@
  */
 
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server.js";
+import { paginationOptsValidator } from "convex/server";
+import { action, mutation, query } from "./_generated/server.js";
+import { api } from "./_generated/api.js";
 import { scopeValidator } from "./validators.js";
 import { isExpired, matchesPermissionPattern } from "./helpers.js";
 
@@ -1857,3 +1859,116 @@ export const revokeAllRolesUnified = mutation({
     return revokedCount;
   },
 });
+
+/**
+ * List unique user IDs in a tenant who hold a given role.
+ *
+ * Helper for `syncRoleAction`. Pages over `roleAssignments` via the
+ * `by_tenant_role` index and dedupes within each page (a user can hold the
+ * same role in multiple scopes; we only need the userId once per recompute).
+ *
+ * Cross-page dedup is the caller's responsibility — a user split across pages
+ * by Convex's pagination cursor will appear in multiple batches.
+ */
+export const listUserIdsWithRole = query({
+  args: {
+    tenantId: v.string(),
+    role: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    userIds: v.array(v.string()),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const result = await ctx.db
+      .query("roleAssignments")
+      .withIndex("by_tenant_role", (q) =>
+        q.eq("tenantId", args.tenantId).eq("role", args.role),
+      )
+      .paginate(args.paginationOpts);
+
+    const uniqueUserIds = [...new Set(result.page.map((a) => a.userId))];
+
+    return {
+      userIds: uniqueUserIds,
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Sync Role
+ *
+ * Re-materialize `effectivePermissions` and `effectiveRoles` for every user
+ * who currently holds the given role, using the supplied permission map as
+ * the new role definition.
+ *
+ * Use case: a role definition in client code (`defineRoles(...)`) gained or
+ * lost permissions, the app redeployed, and existing assignments still carry
+ * the old materialized rows. `syncRoleAction` walks every assignment and
+ * calls `recomputeUser` per user.
+ *
+ * Behavior preserved across recompute:
+ *   - Direct grants (`directGrant: true` rows in `effectivePermissions`)
+ *   - Direct denies (`directDeny: true` rows in `effectivePermissions`)
+ *   These come from `permissionOverrides` and are intentionally untouched.
+ *
+ * Scale: each user is recomputed in its own mutation transaction. The action
+ * iterates through pages of 50 unique userIds at a time. For very large user
+ * bases, run the action multiple times or shard by tenant.
+ */
+export const syncRoleAction = action({
+  args: {
+    tenantId: v.string(),
+    role: v.string(),
+    rolePermissionsMap: v.record(v.string(), v.array(v.string())),
+    policyClassifications: v.optional(
+      v.record(
+        v.string(),
+        v.union(
+          v.null(),
+          v.literal("allow"),
+          v.literal("deny"),
+          v.literal("deferred"),
+        ),
+      ),
+    ),
+  },
+  returns: v.object({ usersProcessed: v.number() }),
+  handler: async (ctx, args) => {
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+
+    while (true) {
+      const batch: {
+        userIds: string[];
+        isDone: boolean;
+        continueCursor: string;
+      } = await ctx.runQuery(api.unified.listUserIdsWithRole, {
+        tenantId: args.tenantId,
+        role: args.role,
+        paginationOpts: { numItems: 50, cursor },
+      });
+
+      for (const userId of batch.userIds) {
+        if (seen.has(userId)) continue;
+        seen.add(userId);
+        await ctx.runMutation(api.unified.recomputeUser, {
+          tenantId: args.tenantId,
+          userId,
+          rolePermissionsMap: args.rolePermissionsMap,
+          policyClassifications: args.policyClassifications,
+        });
+      }
+
+      if (batch.isDone) break;
+      cursor = batch.continueCursor;
+    }
+
+    return { usersProcessed: seen.size };
+  },
+});
+
