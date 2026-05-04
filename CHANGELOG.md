@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/dbjpanda/convex-authz/compare/v2.2.0...v2.3.0) (2026-05-04)
+
+
+### Features
+
+* add syncRole and syncRoles APIs for role-definition propagation ([#35](https://github.com/dbjpanda/convex-authz/issues/35)) ([efe0495](https://github.com/dbjpanda/convex-authz/commit/efe04952af76ee634b3032b6a9c565010e7e6899))
+
 ## [2.2.0](https://github.com/dbjpanda/convex-authz/compare/convex-authz-v2.1.1...convex-authz-v2.2.0) (2026-04-11)
 
 
