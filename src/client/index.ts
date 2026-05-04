@@ -1103,25 +1103,103 @@ export class Authz<
   }
 
   /**
+   * Build policy classifications from the configured policies. All policies
+   * are classified as "deferred" so they are re-evaluated at read time.
+   * Returns `undefined` when no policies are configured (matches the
+   * optional argument shape on the component-side mutations).
+   */
+  private buildPolicyClassifications():
+    | Record<string, "deferred" | "allow" | "deny" | null>
+    | undefined {
+    if (!this.options.policies) return undefined;
+    const entries = Object.entries(
+      this.options.policies as Record<string, { type?: string }>,
+    );
+    if (entries.length === 0) return undefined;
+    const map: Record<string, "deferred" | "allow" | "deny" | null> = {};
+    for (const [name] of entries) {
+      map[name] = "deferred";
+    }
+    return map;
+  }
+
+  /**
    * Recompute all indexed data for a user (effectiveRoles, effectivePermissions).
    * Useful when role definitions change and you need to rebuild the index.
    */
   async recomputeUser(ctx: MutationCtx | ActionCtx, userId: string): Promise<void> {
     validateUserId(userId);
-    // Build policy classifications from policies config
-    // All policies are classified as "deferred" so they are evaluated at read time in can().
-    const policyClassifications: Record<string, "deferred" | "allow" | "deny" | null> = {};
-    if (this.options.policies) {
-      for (const [name] of Object.entries(this.options.policies as Record<string, { type?: string }>)) {
-        policyClassifications[name] = "deferred";
-      }
-    }
     await ctx.runMutation(this.component.unified.recomputeUser, {
       tenantId: this.options.tenantId,
       userId,
       rolePermissionsMap: this.buildRolePermissionsMap(),
-      policyClassifications: Object.keys(policyClassifications).length > 0 ? policyClassifications : undefined,
+      policyClassifications: this.buildPolicyClassifications(),
     });
+  }
+
+  /**
+   * Re-materialize permissions for every user holding the given role.
+   *
+   * Use after a role definition (`defineRoles(...)`) gains or loses
+   * permissions and you redeploy. Existing assignments still carry the old
+   * materialized rows in `effectivePermissions`; this rebuilds them from the
+   * current role definition while preserving direct grants/denies.
+   *
+   * Requires an action context — internally pages through assignments and
+   * runs `recomputeUser` per user. Each user is one mutation transaction;
+   * a partial failure leaves earlier users updated and stops on the failing
+   * one (rerun is safe and idempotent).
+   *
+   * @param role - Role name from the configured catalog. Type-checked.
+   * @returns Number of unique users recomputed.
+   */
+  async syncRole<RoleName extends keyof R & string>(
+    ctx: ActionCtx,
+    role: RoleName,
+  ): Promise<{ usersProcessed: number }> {
+    const roles = this.options.roles as unknown as Record<string, unknown>;
+    if (!(role in roles)) {
+      throw new Error(`Role "${String(role)}" not found in role catalog`);
+    }
+    return await ctx.runAction(this.component.unified.syncRoleAction, {
+      tenantId: this.options.tenantId,
+      role,
+      rolePermissionsMap: this.buildRolePermissionsMap(),
+      policyClassifications: this.buildPolicyClassifications(),
+    });
+  }
+
+  /**
+   * Re-materialize permissions for every user holding any role in the
+   * configured catalog. Convenience wrapper around `syncRole` that iterates
+   * across all roles.
+   *
+   * Cost is roughly `(unique users with any role) × (one mutation each)`.
+   * For a full deploy-time sync of a 10k-user app, expect tens of seconds.
+   * For very large user bases, prefer running per-role syncs in parallel
+   * (each `syncRole` call is independent).
+   */
+  async syncRoles(
+    ctx: ActionCtx,
+  ): Promise<{ rolesProcessed: number; usersProcessed: number }> {
+    const rolePermissionsMap = this.buildRolePermissionsMap();
+    const policyClassifications = this.buildPolicyClassifications();
+    const roles = Object.keys(rolePermissionsMap);
+
+    let totalUsers = 0;
+    for (const role of roles) {
+      const result = await ctx.runAction(
+        this.component.unified.syncRoleAction,
+        {
+          tenantId: this.options.tenantId,
+          role,
+          rolePermissionsMap,
+          policyClassifications,
+        },
+      );
+      totalUsers += result.usersProcessed;
+    }
+    return { rolesProcessed: roles.length, usersProcessed: totalUsers };
   }
 
   /**

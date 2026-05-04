@@ -580,6 +580,7 @@ describe("Authz class", () => {
         addRelationUnified: "unified.addRelationUnified",
         removeRelationUnified: "unified.removeRelationUnified",
         recomputeUser: "unified.recomputeUser",
+        syncRoleAction: "unified.syncRoleAction",
       },
       indexed: {
         hasRoleFast: "indexed.hasRoleFast",
@@ -1826,6 +1827,100 @@ describe("Authz class", () => {
       );
     });
   });
+
+  describe("syncRole", () => {
+    it("should call unified.syncRoleAction with the configured rolePermissionsMap", async () => {
+      const component = createMockComponent();
+      const authz = new Authz(component, { permissions, roles, tenantId: "test-tenant" });
+
+      const ctx = {
+        runQuery: vi.fn(),
+        runMutation: vi.fn(),
+        runAction: vi.fn().mockResolvedValue({ usersProcessed: 3 }),
+      };
+
+      const result = await authz.syncRole(ctx, "admin");
+
+      expect(result).toEqual({ usersProcessed: 3 });
+      expect(ctx.runAction).toHaveBeenCalledWith(
+        component.unified.syncRoleAction,
+        {
+          tenantId: "test-tenant",
+          role: "admin",
+          rolePermissionsMap: {
+            admin: [
+              "documents:create",
+              "documents:read",
+              "documents:update",
+              "documents:delete",
+            ],
+            viewer: ["documents:read"],
+          },
+          policyClassifications: undefined,
+        }
+      );
+    });
+
+    it("should throw when role is not in the configured catalog", async () => {
+      const component = createMockComponent();
+      const authz = new Authz(component, { permissions, roles, tenantId: "test-tenant" });
+
+      const ctx = {
+        runQuery: vi.fn(),
+        runMutation: vi.fn(),
+        runAction: vi.fn(),
+      };
+
+      await expect(
+        // @ts-expect-error — intentionally bypassing type check to verify runtime guard
+        authz.syncRole(ctx, "nonexistent")
+      ).rejects.toThrow('Role "nonexistent" not found in role catalog');
+      expect(ctx.runAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("syncRoles", () => {
+    it("should call syncRoleAction once per role and aggregate counts", async () => {
+      const component = createMockComponent();
+      const authz = new Authz(component, { permissions, roles, tenantId: "test-tenant" });
+
+      const ctx = {
+        runQuery: vi.fn(),
+        runMutation: vi.fn(),
+        runAction: vi
+          .fn()
+          .mockResolvedValueOnce({ usersProcessed: 5 }) // admin
+          .mockResolvedValueOnce({ usersProcessed: 12 }), // viewer
+      };
+
+      const result = await authz.syncRoles(ctx);
+
+      expect(result).toEqual({ rolesProcessed: 2, usersProcessed: 17 });
+      expect(ctx.runAction).toHaveBeenCalledTimes(2);
+    });
+
+    it("should be a no-op when no roles are configured", async () => {
+      const component = createMockComponent();
+      const emptyPermissions = definePermissions({ noop: { read: true } });
+      const emptyRoles = defineRoles(emptyPermissions, {});
+      const authz = new Authz(component, {
+        permissions: emptyPermissions,
+        roles: emptyRoles,
+        tenantId: "test-tenant",
+      });
+
+      const ctx = {
+        runQuery: vi.fn(),
+        runMutation: vi.fn(),
+        runAction: vi.fn(),
+      };
+
+      const result = await authz.syncRoles(ctx);
+
+      expect(result).toEqual({ rolesProcessed: 0, usersProcessed: 0 });
+      expect(ctx.runAction).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ============================================================================
@@ -2104,6 +2199,7 @@ describe("Authz alias (via Authz)", () => {
         addRelationUnified: "unified.addRelationUnified",
         removeRelationUnified: "unified.removeRelationUnified",
         recomputeUser: "unified.recomputeUser",
+        syncRoleAction: "unified.syncRoleAction",
       },
       indexed: {
         hasRoleFast: "indexed.hasRoleFast",
