@@ -22,6 +22,7 @@
  * ```
  */
 
+import { ConvexError } from "convex/values";
 import type {
   GenericActionCtx,
   GenericDataModel,
@@ -596,9 +597,17 @@ export class Authz<
   ): Promise<void> {
     const allowed = await this.can(ctx, userId, permission, scope);
     if (!allowed) {
-      throw new Error(
-        `Permission denied: ${permission}${scope ? ` on ${scope.type}:${scope.id}` : ""}`
-      );
+      // ConvexError (not plain Error) so the rejection is classified as an
+      // expected, structured failure on the client side instead of an
+      // "Uncaught Error / Server Error" with internal stack trace exposed.
+      // Consumers can catch and pattern-match on `.data.code === "FORBIDDEN"`.
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: `Permission denied: ${permission}${scope ? ` on ${scope.type}:${scope.id}` : ""}`,
+        permission: String(permission),
+        scopeType: scope?.type ?? null,
+        scopeId: scope?.id ?? null,
+      });
     }
   }
 
