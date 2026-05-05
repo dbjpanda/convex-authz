@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/dbjpanda/convex-authz/compare/v2.3.0...v2.3.1) (2026-05-05)
+
+
+### Bug Fixes
+
+* throw ConvexError for permission denials ([#37](https://github.com/dbjpanda/convex-authz/issues/37)) ([3fb4a28](https://github.com/dbjpanda/convex-authz/commit/3fb4a28f8d952e26e8d6513f8d4fbca1f0a63f63))
+
 ## [2.3.0](https://github.com/dbjpanda/convex-authz/compare/v2.2.0...v2.3.0) (2026-05-04)
 
 
