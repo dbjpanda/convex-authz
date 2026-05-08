@@ -16,6 +16,8 @@ import { action, mutation, query } from "./_generated/server.js";
 import { api } from "./_generated/api.js";
 import { scopeValidator } from "./validators.js";
 import { isExpired, matchesPermissionPattern } from "./helpers.js";
+import { paginator } from "convex-helpers/server/pagination";
+import schema from "./schema.js";
 
 /**
  * Exact scope equality check for duplicate detection.
@@ -1882,7 +1884,7 @@ export const listUserIdsWithRole = query({
     continueCursor: v.string(),
   }),
   handler: async (ctx, args) => {
-    const result = await ctx.db
+    const result = await paginator(ctx.db, schema)
       .query("roleAssignments")
       .withIndex("by_tenant_role", (q) =>
         q.eq("tenantId", args.tenantId).eq("role", args.role),

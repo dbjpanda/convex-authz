@@ -3,6 +3,8 @@ import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { isExpired, matchesScope } from "./helpers.js";
 import { scopeValidator } from "./validators.js";
+import { paginator } from "convex-helpers/server/pagination";
+import schema from "./schema";
 
 /**
  * Get all role assignments for a user
@@ -298,8 +300,9 @@ export const getAuditLog = query({
     });
 
     let dbQuery;
+    const db =  (args.paginationOpts !== undefined) ?  paginator(ctx.db, schema) : ctx.db
     if (args.userId !== undefined) {
-      dbQuery = ctx.db
+      dbQuery = db
         .query("auditLog")
         .withIndex("by_tenant_user", (q) =>
           q
@@ -307,7 +310,7 @@ export const getAuditLog = query({
             .eq("userId", args.userId as string)
         );
     } else if (args.action !== undefined) {
-      dbQuery = ctx.db
+      dbQuery = db
         .query("auditLog")
         .withIndex("by_tenant_action", (q) =>
           q
@@ -328,7 +331,7 @@ export const getAuditLog = query({
             )
         );
     } else {
-      dbQuery = ctx.db
+      dbQuery = db
         .query("auditLog")
         .withIndex("by_tenant_timestamp", (q) =>
           q.eq("tenantId", args.tenantId)
