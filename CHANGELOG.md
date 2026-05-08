@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.2](https://github.com/dbjpanda/convex-authz/compare/v2.3.1...v2.3.2) (2026-05-08)
+
+
+### Bug Fixes
+
+* use convex-helpers paginator inside component (resolves [#41](https://github.com/dbjpanda/convex-authz/issues/41)) ([fa03bac](https://github.com/dbjpanda/convex-authz/commit/fa03bacfa6a09fa635e3ffccdd5d23e08f554a66))
+
 ## [2.3.1](https://github.com/dbjpanda/convex-authz/compare/v2.3.0...v2.3.1) (2026-05-05)
 
 
