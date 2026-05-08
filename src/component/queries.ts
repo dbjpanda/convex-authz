@@ -4,7 +4,7 @@ import { query } from "./_generated/server";
 import { isExpired, matchesScope } from "./helpers.js";
 import { scopeValidator } from "./validators.js";
 import { paginator } from "convex-helpers/server/pagination";
-import schema from "./schema";
+import schema from "./schema.js";
 
 /**
  * Get all role assignments for a user
@@ -300,7 +300,7 @@ export const getAuditLog = query({
     });
 
     let dbQuery;
-    const db =  (args.paginationOpts !== undefined) ?  paginator(ctx.db, schema) : ctx.db
+    const db = args.paginationOpts ? paginator(ctx.db, schema) : ctx.db;
     if (args.userId !== undefined) {
       dbQuery = db
         .query("auditLog")
