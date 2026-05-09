@@ -72,14 +72,14 @@ describe("Authz constructor: customRoles config", () => {
     ).toThrow(/grantablePermissions/i);
   });
 
-  it("works without the customRoles option (feature disabled)", () => {
+  it("works without the customRoles option (feature disabled)", async () => {
     const authz = new Authz(createMockComponent(), {
       permissions,
       roles,
       tenantId: "test-tenant",
     });
     // Methods should throw with a helpful message when called without the feature
-    expect(() =>
+    await expect(
       authz.createCustomRole({} as never, {
         name: "x",
         permissions: ["docs:read"],
