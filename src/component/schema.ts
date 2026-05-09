@@ -155,6 +155,18 @@ export default defineSchema({
     ])
     .index("by_tenant_inherited_from", ["tenantId", "inheritedFrom"]),
 
+  customRoles: defineTable({
+    tenantId: v.string(),
+    name: v.string(),
+    permissions: v.array(v.string()),
+    description: v.optional(v.string()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_tenant", ["tenantId"])
+    .index("by_tenant_name", ["tenantId", "name"]),
+
   auditLog: defineTable({
     tenantId: v.optional(v.string()),
     timestamp: v.number(),
@@ -168,7 +180,10 @@ export default defineSchema({
       v.literal("attribute_removed"),
       v.literal("relation_added"),
       v.literal("relation_removed"),
-      v.literal("policy_evaluated")
+      v.literal("policy_evaluated"),
+      v.literal("custom_role_created"),
+      v.literal("custom_role_updated"),
+      v.literal("custom_role_deleted")
     ),
     userId: v.string(),
     actorId: v.optional(v.string()),
@@ -188,6 +203,9 @@ export default defineSchema({
       relation: v.optional(v.string()),
       subject: v.optional(v.string()),
       object: v.optional(v.string()),
+      // v2.4: custom role lifecycle details
+      customRoleId: v.optional(v.string()),
+      customRoleName: v.optional(v.string()),
     }),
   })
     .index("by_tenant_user", ["tenantId", "userId"])
