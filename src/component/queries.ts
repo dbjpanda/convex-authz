@@ -250,7 +250,10 @@ const auditLogActionValidator = v.union(
   v.literal("attribute_removed"),
   v.literal("relation_added"),
   v.literal("relation_removed"),
-  v.literal("policy_evaluated")
+  v.literal("policy_evaluated"),
+  v.literal("custom_role_created"),
+  v.literal("custom_role_updated"),
+  v.literal("custom_role_deleted")
 );
 
 const auditEntryShape = v.object({

@@ -32,6 +32,137 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
     };
+    customRoles: {
+      countCustomRoles: FunctionReference<
+        "query",
+        "internal",
+        { tenantId: string },
+        number,
+        Name
+      >;
+      createCustomRole: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          createdBy: string;
+          description?: string;
+          enableAudit?: boolean;
+          grantablePermissions: Array<string>;
+          maxRolesPerTenant?: number;
+          name: string;
+          permissions: Array<string>;
+          tenantId: string;
+        },
+        string,
+        Name
+      >;
+      deleteCustomRole: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorId?: string;
+          customRoleId: string;
+          enableAudit?: boolean;
+          force?: boolean;
+          tenantId: string;
+        },
+        {
+          assignmentsRevoked: number;
+          deleted: boolean;
+          effectivePermissionsRemoved: number;
+          effectiveRolesRemoved: number;
+        },
+        Name
+      >;
+      getCustomRole: FunctionReference<
+        "query",
+        "internal",
+        { customRoleId: string; tenantId: string },
+        {
+          _creationTime: number;
+          _id: string;
+          createdAt: number;
+          createdBy: string;
+          description?: string;
+          name: string;
+          permissions: Array<string>;
+          tenantId: string;
+          updatedAt: number;
+        } | null,
+        Name
+      >;
+      getCustomRoleByName: FunctionReference<
+        "query",
+        "internal",
+        { name: string; tenantId: string },
+        {
+          _creationTime: number;
+          _id: string;
+          createdAt: number;
+          createdBy: string;
+          description?: string;
+          name: string;
+          permissions: Array<string>;
+          tenantId: string;
+          updatedAt: number;
+        } | null,
+        Name
+      >;
+      getCustomRolePermissions: FunctionReference<
+        "query",
+        "internal",
+        { customRoleId: string; tenantId: string },
+        { name: string; permissions: Array<string> } | null,
+        Name
+      >;
+      listCustomRoles: FunctionReference<
+        "query",
+        "internal",
+        {
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+          tenantId: string;
+        },
+        {
+          continueCursor: string;
+          isDone: boolean;
+          page: Array<{
+            _creationTime: number;
+            _id: string;
+            createdAt: number;
+            createdBy: string;
+            description?: string;
+            name: string;
+            permissions: Array<string>;
+            tenantId: string;
+            updatedAt: number;
+          }>;
+        },
+        Name
+      >;
+      updateCustomRoleDefinition: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actorId?: string;
+          customRoleId: string;
+          description?: string;
+          enableAudit?: boolean;
+          grantablePermissions: Array<string>;
+          name?: string;
+          permissions?: Array<string>;
+          tenantId: string;
+        },
+        { permissions: Array<string>; permissionsChanged: boolean },
+        Name
+      >;
+    };
     indexed: {
       checkPermissionFast: FunctionReference<
         "query",
@@ -217,7 +348,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "attribute_removed"
             | "relation_added"
             | "relation_removed"
-            | "policy_evaluated";
+            | "policy_evaluated"
+            | "custom_role_created"
+            | "custom_role_updated"
+            | "custom_role_deleted";
           limit?: number;
           paginationOpts?: {
             cursor: string | null;
