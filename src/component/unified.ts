@@ -10,7 +10,7 @@
  *   3. No match -> denied
  */
 
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { action, mutation, query } from "./_generated/server.js";
 import { api } from "./_generated/api.js";
@@ -152,6 +152,97 @@ async function tryExtendExistingAssignment(
   }
 
   return null;
+}
+
+/**
+ * Revoke a single (user, role, scope) assignment, dual-writing the deletion
+ * to `effectiveRoles` and removing this role from `effectivePermissions.sources`
+ * (deleting the row entirely when no other sources / direct grants remain).
+ *
+ * Returns true if a matching assignment was found and revoked, false if no
+ * such assignment existed.
+ */
+async function revokeAssignmentDualWrite(
+  ctx: MutationCtx,
+  args: {
+    tenantId: string;
+    userId: string;
+    role: string;
+    rolePermissions: string[];
+    scope: { type: string; id: string } | undefined;
+    scopeKey: string;
+    now: number;
+  },
+): Promise<boolean> {
+  const assignments = await ctx.db
+    .query("roleAssignments")
+    .withIndex("by_tenant_user_and_role", (q) =>
+      q
+        .eq("tenantId", args.tenantId)
+        .eq("userId", args.userId)
+        .eq("role", args.role),
+    )
+    .take(100);
+
+  const assignment = assignments.find((row) =>
+    scopeEquals(row.scope, args.scope),
+  );
+
+  if (!assignment) return false;
+
+  // 1. Source row
+  await ctx.db.delete(assignment._id);
+
+  // 2. effectiveRoles row
+  const effectiveRole = await ctx.db
+    .query("effectiveRoles")
+    .withIndex("by_tenant_user_role_scope", (q) =>
+      q
+        .eq("tenantId", args.tenantId)
+        .eq("userId", args.userId)
+        .eq("role", args.role)
+        .eq("scopeKey", args.scopeKey),
+    )
+    .unique();
+  if (effectiveRole) {
+    await ctx.db.delete(effectiveRole._id);
+  }
+
+  // 3. effectivePermissions: remove this role from sources, deleting the row
+  //    entirely if no other sources and no direct grant/deny remain.
+  for (const permission of args.rolePermissions) {
+    const effectivePerm = await ctx.db
+      .query("effectivePermissions")
+      .withIndex("by_tenant_user_permission_scope", (q) =>
+        q
+          .eq("tenantId", args.tenantId)
+          .eq("userId", args.userId)
+          .eq("permission", permission)
+          .eq("scopeKey", args.scopeKey),
+      )
+      .unique();
+
+    if (!effectivePerm) continue;
+
+    const updatedSources = effectivePerm.sources.filter(
+      (s) => s !== args.role,
+    );
+
+    if (
+      updatedSources.length === 0 &&
+      !effectivePerm.directGrant &&
+      !effectivePerm.directDeny
+    ) {
+      await ctx.db.delete(effectivePerm._id);
+    } else if (updatedSources.length !== effectivePerm.sources.length) {
+      await ctx.db.patch(effectivePerm._id, {
+        sources: updatedSources,
+        updatedAt: args.now,
+      });
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -537,82 +628,22 @@ export const revokeRoleUnified = mutation({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const now = Date.now();
-
-    // 1. Compute scopeKey
     const scopeKey = args.scope
       ? `${args.scope.type}:${args.scope.id}`
       : "global";
 
-    // 2. Find the role assignment in roleAssignments
-    const assignments = await ctx.db
-      .query("roleAssignments")
-      .withIndex("by_tenant_user_and_role", (q) =>
-        q
-          .eq("tenantId", args.tenantId)
-          .eq("userId", args.userId)
-          .eq("role", args.role)
-      )
-      .take(100);
+    const revoked = await revokeAssignmentDualWrite(ctx, {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role: args.role,
+      rolePermissions: args.rolePermissions,
+      scope: args.scope,
+      scopeKey,
+      now,
+    });
 
-    const assignment = assignments.find(
-      (row) => scopeEquals(row.scope, args.scope)
-    );
+    if (!revoked) return false;
 
-    if (!assignment) {
-      return false;
-    }
-
-    // 3. Delete from roleAssignments
-    await ctx.db.delete(assignment._id);
-
-    // 4. Delete from effectiveRoles
-    const effectiveRole = await ctx.db
-      .query("effectiveRoles")
-      .withIndex("by_tenant_user_role_scope", (q) =>
-        q
-          .eq("tenantId", args.tenantId)
-          .eq("userId", args.userId)
-          .eq("role", args.role)
-          .eq("scopeKey", scopeKey)
-      )
-      .unique();
-
-    if (effectiveRole) {
-      await ctx.db.delete(effectiveRole._id);
-    }
-
-    // 5. For each permission the revoked role granted, update effectivePermissions
-    for (const permission of args.rolePermissions) {
-      const effectivePerm = await ctx.db
-        .query("effectivePermissions")
-        .withIndex("by_tenant_user_permission_scope", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("permission", permission)
-            .eq("scopeKey", scopeKey)
-        )
-        .unique();
-
-      if (!effectivePerm) continue;
-
-      const updatedSources = effectivePerm.sources.filter(
-        (s) => s !== args.role
-      );
-
-      if (updatedSources.length === 0 && !effectivePerm.directGrant && !effectivePerm.directDeny) {
-        // No more sources, no direct grant, no direct deny — delete the row
-        await ctx.db.delete(effectivePerm._id);
-      } else if (updatedSources.length !== effectivePerm.sources.length) {
-        // Role was in sources; patch with updated array
-        await ctx.db.patch(effectivePerm._id, {
-          sources: updatedSources,
-          updatedAt: now,
-        });
-      }
-    }
-
-    // 6. Audit log
     if (args.enableAudit) {
       await ctx.db.insert("auditLog", {
         tenantId: args.tenantId,
@@ -627,7 +658,169 @@ export const revokeRoleUnified = mutation({
       });
     }
 
-    // 7. Return true
+    return true;
+  },
+});
+
+/**
+ * Unified Custom Role Assignment
+ *
+ * Assigns a tenant-defined custom role to a user. The custom role row is
+ * looked up first (validating tenant ownership), its snapshot permissions are
+ * read, and the same dual-write helpers used by `assignRoleUnified` do the
+ * rest. The role is stored in `roleAssignments.role` and `effectiveRoles.role`
+ * as the namespaced string `"custom:<id>"`, which keeps the read path
+ * (`hasRoleFast`, `checkPermissionFast`) treating system and custom roles
+ * identically.
+ *
+ * Throws `CUSTOM_ROLE_NOT_FOUND` if the role does not exist or belongs to a
+ * different tenant.
+ */
+export const assignCustomRoleUnified = mutation({
+  args: {
+    tenantId: v.string(),
+    userId: v.string(),
+    customRoleId: v.id("customRoles"),
+    scope: scopeValidator,
+    expiresAt: v.optional(v.number()),
+    assignedBy: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+    enableAudit: v.optional(v.boolean()),
+    policyClassifications: v.optional(
+      v.record(
+        v.string(),
+        v.union(
+          v.null(),
+          v.literal("allow"),
+          v.literal("deny"),
+          v.literal("deferred"),
+        ),
+      ),
+    ),
+  },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    const customRole = await ctx.db.get(args.customRoleId);
+    if (customRole === null || customRole.tenantId !== args.tenantId) {
+      throw new ConvexError({
+        code: "CUSTOM_ROLE_NOT_FOUND",
+        message: "Custom role does not exist in this tenant",
+        customRoleId: args.customRoleId,
+      });
+    }
+
+    const role = `custom:${args.customRoleId}`;
+    const scopeKey = args.scope
+      ? `${args.scope.type}:${args.scope.id}`
+      : "global";
+
+    const inputs: AssignmentInputs = {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role,
+      rolePermissions: customRole.permissions,
+      scope: args.scope,
+      scopeKey,
+      expiresAt: args.expiresAt,
+      assignedBy: args.assignedBy,
+      metadata: args.metadata,
+      policyClassifications: args.policyClassifications,
+      now,
+    };
+
+    const existingId = await tryExtendExistingAssignment(ctx, inputs);
+    if (existingId !== null) return existingId;
+
+    const assignmentId = await writeNewAssignment(ctx, inputs);
+
+    if (args.enableAudit) {
+      await ctx.db.insert("auditLog", {
+        tenantId: args.tenantId,
+        timestamp: now,
+        action: "role_assigned",
+        userId: args.userId,
+        actorId: args.assignedBy,
+        details: {
+          role,
+          scope: args.scope,
+          customRoleId: args.customRoleId,
+          customRoleName: customRole.name,
+        },
+      });
+    }
+
+    return assignmentId;
+  },
+});
+
+/**
+ * Unified Custom Role Revocation
+ *
+ * Revokes a custom role assignment from a user. Looks up the customRoles row
+ * to obtain the snapshot permission list (so we know which `effectivePermissions`
+ * rows to scrub), then delegates to the shared revoke helper.
+ *
+ * Returns false if there was no matching assignment (idempotent). Throws
+ * `CUSTOM_ROLE_NOT_FOUND` only when the role row itself is missing — not when
+ * the user simply doesn't hold it.
+ */
+export const revokeCustomRoleUnified = mutation({
+  args: {
+    tenantId: v.string(),
+    userId: v.string(),
+    customRoleId: v.id("customRoles"),
+    scope: scopeValidator,
+    revokedBy: v.optional(v.string()),
+    enableAudit: v.optional(v.boolean()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    const customRole = await ctx.db.get(args.customRoleId);
+    if (customRole === null || customRole.tenantId !== args.tenantId) {
+      throw new ConvexError({
+        code: "CUSTOM_ROLE_NOT_FOUND",
+        message: "Custom role does not exist in this tenant",
+        customRoleId: args.customRoleId,
+      });
+    }
+
+    const role = `custom:${args.customRoleId}`;
+    const scopeKey = args.scope
+      ? `${args.scope.type}:${args.scope.id}`
+      : "global";
+
+    const revoked = await revokeAssignmentDualWrite(ctx, {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role,
+      rolePermissions: customRole.permissions,
+      scope: args.scope,
+      scopeKey,
+      now,
+    });
+
+    if (!revoked) return false;
+
+    if (args.enableAudit) {
+      await ctx.db.insert("auditLog", {
+        tenantId: args.tenantId,
+        timestamp: now,
+        action: "role_revoked",
+        userId: args.userId,
+        actorId: args.revokedBy,
+        details: {
+          role,
+          scope: args.scope,
+          customRoleId: args.customRoleId,
+          customRoleName: customRole.name,
+        },
+      });
+    }
+
     return true;
   },
 });
@@ -1583,83 +1776,23 @@ export const revokeRolesUnified = mutation({
     let revoked = 0;
 
     for (const item of args.roles) {
-      // 1. Compute scopeKey
       const scopeKey = item.scope
         ? `${item.scope.type}:${item.scope.id}`
         : "global";
 
-      // 2. Find the role assignment in roleAssignments
-      const assignments = await ctx.db
-        .query("roleAssignments")
-        .withIndex("by_tenant_user_and_role", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("role", item.role)
-        )
-        .take(100);
+      const wasRevoked = await revokeAssignmentDualWrite(ctx, {
+        tenantId: args.tenantId,
+        userId: args.userId,
+        role: item.role,
+        rolePermissions: args.rolePermissionsMap[item.role] ?? [],
+        scope: item.scope,
+        scopeKey,
+        now,
+      });
 
-      const assignment = assignments.find(
-        (row) => scopeEquals(row.scope, item.scope)
-      );
-
-      if (!assignment) {
-        continue;
-      }
-
-      // 3. Delete from roleAssignments
-      await ctx.db.delete(assignment._id);
+      if (!wasRevoked) continue;
       revoked++;
 
-      // 4. Delete from effectiveRoles
-      const effectiveRole = await ctx.db
-        .query("effectiveRoles")
-        .withIndex("by_tenant_user_role_scope", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("role", item.role)
-            .eq("scopeKey", scopeKey)
-        )
-        .unique();
-
-      if (effectiveRole) {
-        await ctx.db.delete(effectiveRole._id);
-      }
-
-      // 5. For each permission the role grants, update effectivePermissions
-      const permissions = args.rolePermissionsMap[item.role] ?? [];
-      for (const permission of permissions) {
-        const effectivePerm = await ctx.db
-          .query("effectivePermissions")
-          .withIndex("by_tenant_user_permission_scope", (q) =>
-            q
-              .eq("tenantId", args.tenantId)
-              .eq("userId", args.userId)
-              .eq("permission", permission)
-              .eq("scopeKey", scopeKey)
-          )
-          .unique();
-
-        if (!effectivePerm) continue;
-
-        const updatedSources = effectivePerm.sources.filter(
-          (s) => s !== item.role
-        );
-
-        if (updatedSources.length === 0 && !effectivePerm.directGrant && !effectivePerm.directDeny) {
-          // No more sources, no direct grant, no direct deny — delete the row
-          await ctx.db.delete(effectivePerm._id);
-        } else if (updatedSources.length !== effectivePerm.sources.length) {
-          // Role was in sources; patch with updated array
-          await ctx.db.patch(effectivePerm._id, {
-            sources: updatedSources,
-            updatedAt: now,
-          });
-        }
-      }
-
-      // 6. Audit log if enableAudit
       if (args.enableAudit) {
         await ctx.db.insert("auditLog", {
           tenantId: args.tenantId,

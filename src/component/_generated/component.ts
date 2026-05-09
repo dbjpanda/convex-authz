@@ -568,6 +568,26 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         string,
         Name
       >;
+      assignCustomRoleUnified: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          assignedBy?: string;
+          customRoleId: string;
+          enableAudit?: boolean;
+          expiresAt?: number;
+          metadata?: any;
+          policyClassifications?: Record<
+            string,
+            null | "allow" | "deny" | "deferred"
+          >;
+          scope?: { id: string; type: string };
+          tenantId: string;
+          userId: string;
+        },
+        string,
+        Name
+      >;
       assignRolesUnified: FunctionReference<
         "mutation",
         "internal",
@@ -718,6 +738,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           userId: string;
         },
         number,
+        Name
+      >;
+      revokeCustomRoleUnified: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          customRoleId: string;
+          enableAudit?: boolean;
+          revokedBy?: string;
+          scope?: { id: string; type: string };
+          tenantId: string;
+          userId: string;
+        },
+        boolean,
         Name
       >;
       revokeRolesUnified: FunctionReference<
