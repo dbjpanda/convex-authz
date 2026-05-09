@@ -1046,6 +1046,235 @@ describe("mutations - additional coverage", () => {
     });
   });
 
+  describe("removeOverride", () => {
+    it("should remove a direct override and delete effective permission with no remaining sources", async () => {
+      const t = convexTest(schema, modules);
+
+      await t.mutation(api.unified.grantPermissionUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        reason: "Temporary access",
+      });
+
+      const result = await t.mutation(api.unified.removeOverrideUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        rolePermissionsMap: {},
+        removedBy: "actor_1",
+        enableAudit: true,
+      });
+
+      expect(result).toBe(true);
+
+      const overrides = await t.query(api.queries.getPermissionOverrides, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+      expect(overrides).toHaveLength(0);
+
+      const check = await t.query(api.unified.checkPermission, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+      expect(check.allowed).toBe(false);
+
+      const logsResult = await t.query(api.queries.getAuditLog, {
+        tenantId: TENANT,
+        userId: "user_123",
+      });
+      const logs = Array.isArray(logsResult) ? logsResult : logsResult.page;
+      expect(logs.some((l) => l.action === "permission_override_removed")).toBe(true);
+    });
+
+    it("should restore role-derived allow after removing a deny override", async () => {
+      const t = convexTest(schema, modules);
+
+      await t.mutation(api.unified.assignRoleUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        role: "editor",
+        rolePermissions: ["documents:delete"],
+      });
+
+      await t.mutation(api.unified.denyPermissionUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        reason: "Temporary block",
+      });
+
+      let check = await t.query(api.unified.checkPermission, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+      expect(check.allowed).toBe(false);
+
+      const result = await t.mutation(api.unified.removeOverrideUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        rolePermissionsMap: {
+          editor: ["documents:delete"],
+        },
+      });
+
+      expect(result).toBe(true);
+
+      check = await t.query(api.unified.checkPermission, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+      expect(check.allowed).toBe(true);
+
+      const effectivePerms = await t.run(async (ctx) =>
+        await ctx.db.query("effectivePermissions").collect()
+      );
+      const restored = effectivePerms.find(
+        (perm) =>
+          perm.userId === "user_123" &&
+          perm.permission === "documents:delete" &&
+          perm.scopeKey === "global"
+      );
+
+      expect(restored).toBeDefined();
+      expect(restored?.effect).toBe("allow");
+      expect(restored?.sources).toEqual(["editor"]);
+      expect(restored?.directDeny).toBeUndefined();
+      expect(restored?.directGrant).toBeUndefined();
+      expect(restored?.reason).toBeUndefined();
+    });
+
+    it("should restore role expiration after removing a grant override", async () => {
+      const t = convexTest(schema, modules);
+      const expiresAt = Date.now() + 3600000;
+
+      await t.mutation(api.unified.assignRoleUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        role: "editor",
+        rolePermissions: ["documents:delete"],
+        expiresAt,
+      });
+
+      await t.mutation(api.unified.grantPermissionUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+
+      await t.mutation(api.unified.removeOverrideUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        rolePermissionsMap: {
+          editor: ["documents:delete"],
+        },
+      });
+
+      const effectivePerms = await t.run(async (ctx) =>
+        await ctx.db.query("effectivePermissions").collect()
+      );
+      const restored = effectivePerms.find(
+        (perm) => perm.userId === "user_123" && perm.permission === "documents:delete"
+      );
+
+      expect(restored?.expiresAt).toBe(expiresAt);
+    });
+
+    it("should restore deferred policy state after removing a grant override", async () => {
+      const t = convexTest(schema, modules);
+
+      await t.mutation(api.unified.assignRoleUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        role: "editor",
+        rolePermissions: ["documents:delete"],
+        policyClassifications: {
+          "documents:delete": "deferred",
+        },
+      });
+
+      await t.mutation(api.unified.grantPermissionUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+
+      await t.mutation(api.unified.removeOverrideUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        rolePermissionsMap: {
+          editor: ["documents:delete"],
+        },
+        policyClassifications: {
+          "documents:delete": "deferred",
+        },
+      });
+
+      const check = await t.query(api.unified.checkPermission, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+
+      expect(check.allowed).toBe(true);
+      expect(check.tier).toBe("deferred");
+      expect(check.policyName).toBe("documents:delete");
+    });
+
+    it("should drop stale role sources that are no longer in the role permissions map", async () => {
+      const t = convexTest(schema, modules);
+
+      await t.mutation(api.unified.assignRoleUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        role: "legacy_editor",
+        rolePermissions: ["documents:delete"],
+      });
+
+      await t.mutation(api.unified.denyPermissionUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+
+      await t.mutation(api.unified.removeOverrideUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        rolePermissionsMap: {},
+      });
+
+      const check = await t.query(api.unified.checkPermission, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+      });
+
+      expect(check.allowed).toBe(false);
+    });
+
+    it("should return false when no matching override exists", async () => {
+      const t = convexTest(schema, modules);
+
+      const result = await t.mutation(api.unified.removeOverrideUnified, {
+        tenantId: TENANT,
+        userId: "user_123",
+        permission: "documents:delete",
+        rolePermissionsMap: {},
+      });
+
+      expect(result).toBe(false);
+    });
+  });
+
 
 
   describe("cleanupExpired", () => {
