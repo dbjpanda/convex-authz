@@ -1367,6 +1367,32 @@ export class Authz<
   }
 
   /**
+   * Remove a direct permission override and restore role/policy-derived access.
+   * Returns false when no matching override exists.
+   */
+  async removeOverride(
+    ctx: MutationCtx | ActionCtx,
+    userId: string,
+    permission: PermissionArg<P>,
+    scope?: Scope,
+    actorId?: string
+  ): Promise<boolean> {
+    validateUserId(userId);
+    validatePermission(permission);
+    validateScope(scope);
+    return await ctx.runMutation(this.component.unified.removeOverrideUnified, {
+      tenantId: this.options.tenantId,
+      userId,
+      permission,
+      scope,
+      rolePermissionsMap: this.buildRolePermissionsMap(),
+      policyClassifications: this.buildPolicyClassifications(),
+      removedBy: actorId ?? this.options.defaultActorId,
+      enableAudit: true,
+    });
+  }
+
+  /**
    * Check relationship - O(1) indexed lookup
    */
   async hasRelation(
@@ -1595,6 +1621,7 @@ export class Authz<
         | "role_revoked"
         | "permission_granted"
         | "permission_denied"
+        | "permission_override_removed"
         | "attribute_set"
         | "attribute_removed"
         | "relation_added"

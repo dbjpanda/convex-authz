@@ -393,6 +393,30 @@ export const denyPermission = mutation({
   },
 });
 
+/**
+ * Remove a permission override (grant or deny) for a user. The third symmetric
+ * counterpart to grantPermission / denyPermission — see Authz.removeOverride.
+ */
+export const removeOverride = mutation({
+  args: {
+    userId: v.id("users"),
+    permission: v.string(),
+    orgId: v.optional(v.id("orgs")),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const scope = args.orgId
+      ? { type: "org", id: String(args.orgId) }
+      : undefined;
+    return await authz.removeOverride(
+      ctx,
+      String(args.userId),
+      args.permission as any,
+      scope,
+    );
+  },
+});
+
 // ============================================================================
 // Custom Roles (issue #31) — tenant admins compose roles at runtime
 // ============================================================================

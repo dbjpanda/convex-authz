@@ -176,6 +176,7 @@ export default defineSchema({
       v.literal("role_revoked"),
       v.literal("permission_granted"),
       v.literal("permission_denied"),
+      v.literal("permission_override_removed"),
       v.literal("attribute_set"),
       v.literal("attribute_removed"),
       v.literal("relation_added"),
