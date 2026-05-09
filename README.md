@@ -1034,11 +1034,25 @@ await authz.denyPermission(ctx, userId, "documents:delete", undefined, "Access r
 
 ### Removing Permission Overrides
 
-```typescript
-// Remove a direct grant or deny and restore access from roles/policies
-await authz.removeOverride(ctx, userId, "documents:delete");
+`grantPermission` and `denyPermission` are **not** inverses. They upsert into
+the same `permissionOverrides` row (keyed by user + permission + scope), so
+calling `denyPermission` after `grantPermission` rewrites the row's `effect`
+from `"allow"` to `"deny"` — the override persists, just inverted. A deny is
+meaningfully different from "no override at all": a deny blocks the
+permission even if the user holds it via a role, while no override lets
+role-derived access flow through normally.
 
-// With scope
+To truly undo an override and return to baseline (no row in
+`permissionOverrides`), use `removeOverride`. After removal, role-derived
+sources, deferred policy state, and role-based expiry are all properly
+restored on the effective row.
+
+```typescript
+// Remove a direct grant or deny — returns true if a row was deleted, false if no
+// override existed for the given (user, permission, scope) tuple. Idempotent.
+const removed = await authz.removeOverride(ctx, userId, "documents:delete");
+
+// Scope must match the original override exactly — global is distinct from scoped
 await authz.removeOverride(ctx, userId, "documents:delete", { type: "team", id: "team_123" });
 ```
 
