@@ -15,9 +15,11 @@
 import { v } from "convex/values";
 import { ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
+import { paginator } from "convex-helpers/server/pagination";
 import { action, mutation, query } from "./_generated/server.js";
 import { api } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
+import schema from "./schema.js";
 
 const DEFAULT_MAX_ROLES_PER_TENANT = 100;
 const CUSTOM_ROLE_PREFIX = "custom:";
@@ -394,7 +396,9 @@ export const listCustomRoles = query({
     continueCursor: v.string(),
   }),
   handler: async (ctx, args) => {
-    const result = await ctx.db
+    // Use convex-helpers' paginator: native ctx.db.paginate() is not supported
+    // inside Convex components (see resolved issue #41 — same root cause).
+    const result = await paginator(ctx.db, schema)
       .query("customRoles")
       .withIndex("by_tenant", (q) => q.eq("tenantId", args.tenantId))
       .paginate(args.paginationOpts);
