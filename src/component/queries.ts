@@ -246,6 +246,7 @@ const auditLogActionValidator = v.union(
   v.literal("role_revoked"),
   v.literal("permission_granted"),
   v.literal("permission_denied"),
+  v.literal("permission_override_removed"),
   v.literal("attribute_set"),
   v.literal("attribute_removed"),
   v.literal("relation_added"),
@@ -323,6 +324,7 @@ export const getAuditLog = query({
                 | "role_revoked"
                 | "permission_granted"
                 | "permission_denied"
+                | "permission_override_removed"
                 | "attribute_set"
                 | "attribute_removed"
                 | "relation_added"

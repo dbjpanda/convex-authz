@@ -496,6 +496,9 @@ await authz.grantPermission(ctx, userId, "documents:*", undefined, "Full documen
 
 // Deny read on any resource
 await authz.denyPermission(ctx, userId, "*:read", undefined, "Read access revoked");
+
+// Remove the direct override and fall back to role/policy-derived access
+await authz.removeOverride(ctx, userId, "*:read");
 ```
 
 **Role definitions:** When the component evaluates permissions, it matches the requested permission against each role’s permission list using the same pattern rules. So if a role’s permissions include `"documents:*"` (in the flattened role–permission map), then `can(ctx, userId, "documents:read")` is allowed. With `defineRoles` you typically list concrete actions per resource (e.g. `documents: ["read", "update"]`); to use patterns in roles you would supply a role-permission map that includes pattern strings for that role.
@@ -947,6 +950,16 @@ await authz.grantPermission(ctx, userId, "documents:delete", undefined, "Tempora
 await authz.denyPermission(ctx, userId, "documents:delete", undefined, "Access restricted");
 ```
 
+### Removing Permission Overrides
+
+```typescript
+// Remove a direct grant or deny and restore access from roles/policies
+await authz.removeOverride(ctx, userId, "documents:delete");
+
+// With scope
+await authz.removeOverride(ctx, userId, "documents:delete", { type: "team", id: "team_123" });
+```
+
 ---
 
 ## Schema Reference
@@ -1018,6 +1031,7 @@ class Authz<P, R, Policy> {
   // Permission overrides
   grantPermission(ctx, userId, permission, scope?, reason?, expiresAt?, actorId?): Promise<string>
   denyPermission(ctx, userId, permission, scope?, reason?, expiresAt?, actorId?): Promise<string>
+  removeOverride(ctx, userId, permission, scope?, actorId?): Promise<boolean>
   
   // Audit
   getAuditLog(ctx, options?): Promise<AuditEntry[] | { page: AuditEntry[]; isDone: boolean; continueCursor: string }>

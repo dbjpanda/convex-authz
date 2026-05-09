@@ -213,6 +213,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "role_revoked"
             | "permission_granted"
             | "permission_denied"
+            | "permission_override_removed"
             | "attribute_set"
             | "attribute_removed"
             | "relation_added"
@@ -553,6 +554,25 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           userId: string;
         },
         null,
+        Name
+      >;
+      removeOverrideUnified: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          enableAudit?: boolean;
+          permission: string;
+          policyClassifications?: Record<
+            string,
+            null | "allow" | "deny" | "deferred"
+          >;
+          removedBy?: string;
+          rolePermissionsMap: Record<string, Array<string>>;
+          scope?: { id: string; type: string };
+          tenantId: string;
+          userId: string;
+        },
+        boolean,
         Name
       >;
       removeRelationUnified: FunctionReference<

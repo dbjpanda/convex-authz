@@ -577,6 +577,7 @@ describe("Authz class", () => {
         revokeAllRolesUnified: "unified.revokeAllRolesUnified",
         grantPermissionUnified: "unified.grantPermissionUnified",
         denyPermissionUnified: "unified.denyPermissionUnified",
+        removeOverrideUnified: "unified.removeOverrideUnified",
         addRelationUnified: "unified.addRelationUnified",
         removeRelationUnified: "unified.removeRelationUnified",
         recomputeUser: "unified.recomputeUser",
@@ -1671,6 +1672,62 @@ describe("Authz class", () => {
           objectId: "sales",
           tenantId: "test-tenant",
         }
+      );
+    });
+  });
+
+  describe("removeOverride", () => {
+    it("should remove permission override via unified.removeOverrideUnified", async () => {
+      const component = createMockComponent();
+      const authz = new Authz(component, { permissions, roles, tenantId: "test-tenant" });
+
+      const ctx = {
+        runMutation: vi.fn().mockResolvedValue(true),
+      };
+
+      const result = await authz.removeOverride(
+        ctx,
+        "user_123",
+        "documents:delete"
+      );
+
+      expect(result).toBe(true);
+      expect(ctx.runMutation).toHaveBeenCalledWith(
+        component.unified.removeOverrideUnified,
+        expect.objectContaining({
+          userId: "user_123",
+          permission: "documents:delete",
+          enableAudit: true,
+          tenantId: "test-tenant",
+        })
+      );
+    });
+
+    it("should pass scope and actorId", async () => {
+      const component = createMockComponent();
+      const authz = new Authz(component, { permissions, roles, tenantId: "test-tenant" });
+
+      const ctx = {
+        runMutation: vi.fn().mockResolvedValue(true),
+      };
+
+      const scope = { type: "doc", id: "doc_1" };
+      await authz.removeOverride(
+        ctx,
+        "user_123",
+        "documents:delete",
+        scope,
+        "actor_1"
+      );
+
+      expect(ctx.runMutation).toHaveBeenCalledWith(
+        component.unified.removeOverrideUnified,
+        expect.objectContaining({
+          scope,
+          removedBy: "actor_1",
+          tenantId: "test-tenant",
+          rolePermissionsMap: expect.any(Object),
+        })
       );
     });
   });

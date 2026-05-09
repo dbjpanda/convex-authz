@@ -582,7 +582,7 @@ export const grantPermissionUnified = mutation({
           .eq("userId", args.userId)
           .eq("permission", args.permission)
       )
-      .take(100);
+      .take(4000);
 
     const existingOverride = existingOverrides.find((row) =>
       scopeEquals(row.scope, args.scope)
@@ -676,6 +676,177 @@ export const grantPermissionUnified = mutation({
 
     // 5. Return override ID
     return overrideId;
+  },
+});
+
+/**
+ * Remove a direct permission override.
+ *
+ * This deletes the source-of-truth override and clears directGrant/directDeny
+ * from the indexed effective permission. If the permission still has role or
+ * policy sources, the indexed row is restored to an allow from those sources;
+ * otherwise it is removed entirely.
+ */
+export const removeOverrideUnified = mutation({
+  args: {
+    tenantId: v.string(),
+    userId: v.string(),
+    permission: v.string(),
+    scope: scopeValidator,
+    rolePermissionsMap: v.record(v.string(), v.array(v.string())),
+    policyClassifications: v.optional(v.record(v.string(), v.union(
+      v.null(),
+      v.literal("allow"),
+      v.literal("deny"),
+      v.literal("deferred"),
+    ))),
+    removedBy: v.optional(v.string()),
+    enableAudit: v.optional(v.boolean()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const scopeKey = args.scope
+      ? `${args.scope.type}:${args.scope.id}`
+      : "global";
+
+    const existingOverrides = await ctx.db
+      .query("permissionOverrides")
+      .withIndex("by_tenant_user_and_permission", (q) =>
+        q
+          .eq("tenantId", args.tenantId)
+          .eq("userId", args.userId)
+          .eq("permission", args.permission)
+      )
+      .take(100);
+
+    const existingOverride = existingOverrides.find((row) =>
+      scopeEquals(row.scope, args.scope)
+    );
+
+    if (!existingOverride) {
+      return false;
+    }
+
+    await ctx.db.delete(existingOverride._id);
+
+    const existingPerm = await ctx.db
+      .query("effectivePermissions")
+      .withIndex("by_tenant_user_permission_scope", (q) =>
+        q
+          .eq("tenantId", args.tenantId)
+          .eq("userId", args.userId)
+          .eq("permission", args.permission)
+          .eq("scopeKey", scopeKey)
+      )
+      .unique();
+
+    const roleAssignments = await ctx.db
+      .query("roleAssignments")
+      .withIndex("by_tenant_user", (q) =>
+        q.eq("tenantId", args.tenantId).eq("userId", args.userId)
+      )
+      .take(4000);
+
+    const nonRoleSources = existingPerm?.sources.filter((source) =>
+      source.startsWith("relation:")
+    ) ?? [];
+    const roleSources: string[] = [];
+    let roleExpiresAt: number | undefined | null = null;
+
+    for (const assignment of roleAssignments) {
+      if (!scopeEquals(assignment.scope, args.scope) || isExpired(assignment.expiresAt)) {
+        continue;
+      }
+
+      const permissions = args.rolePermissionsMap[assignment.role] ?? [];
+      const classification = args.policyClassifications?.[args.permission] ?? null;
+
+      if (!permissions.includes(args.permission) || classification === "deny") {
+        continue;
+      }
+
+      if (!roleSources.includes(assignment.role)) {
+        roleSources.push(assignment.role);
+      }
+
+      if (assignment.expiresAt === undefined) {
+        roleExpiresAt = undefined;
+      } else if (roleExpiresAt !== undefined) {
+        roleExpiresAt =
+          roleExpiresAt === null
+            ? assignment.expiresAt
+            : Math.max(roleExpiresAt, assignment.expiresAt);
+      }
+    }
+
+    const sources = [...nonRoleSources, ...roleSources];
+
+    if (sources.length > 0) {
+      const classification = args.policyClassifications?.[args.permission] ?? null;
+      const patchData: Record<string, unknown> = {
+        directGrant: undefined,
+        directDeny: undefined,
+        effect: "allow",
+        sources,
+        reason: undefined,
+        expiresAt: nonRoleSources.length > 0
+          ? existingPerm?.expiresAt
+          : roleExpiresAt === null
+            ? undefined
+            : roleExpiresAt,
+        policyResult: undefined,
+        policyName: undefined,
+        updatedAt: now,
+      };
+
+      if (classification === "deferred") {
+        patchData.policyResult = "deferred";
+        patchData.policyName = args.permission;
+      } else if (classification === "allow") {
+        patchData.policyResult = "allow";
+      }
+
+      if (existingPerm) {
+        await ctx.db.patch(existingPerm._id, {
+          ...patchData,
+        });
+      } else {
+        await ctx.db.insert("effectivePermissions", {
+          tenantId: args.tenantId,
+          userId: args.userId,
+          permission: args.permission,
+          scopeKey,
+          scope: args.scope,
+          effect: "allow",
+          sources,
+          expiresAt: patchData.expiresAt as number | undefined,
+          policyResult: patchData.policyResult as "allow" | "deferred" | undefined,
+          policyName: patchData.policyName as string | undefined,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    } else if (existingPerm) {
+      await ctx.db.delete(existingPerm._id);
+    }
+
+    if (args.enableAudit) {
+      await ctx.db.insert("auditLog", {
+        tenantId: args.tenantId,
+        timestamp: now,
+        action: "permission_override_removed",
+        userId: args.userId,
+        actorId: args.removedBy,
+        details: {
+          permission: args.permission,
+          scope: args.scope,
+          reason: `override_removed:${existingOverride.effect}`,
+        },
+      });
+    }
+
+    return true;
   },
 });
 
@@ -1973,4 +2144,3 @@ export const syncRoleAction = action({
     return { usersProcessed: seen.size };
   },
 });
-
