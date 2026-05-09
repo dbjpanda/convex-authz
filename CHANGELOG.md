@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.4.0](https://github.com/dbjpanda/convex-authz/compare/v2.3.2...v2.4.0) (2026-05-09)
+
+
+### Features
+
+* add permission override removal API ([e722666](https://github.com/dbjpanda/convex-authz/commit/e7226660e9b63648a66b5bf4532e2d566700cb12))
+* **custom-roles:** add assignCustomRoleUnified + revokeCustomRoleUnified ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([676a011](https://github.com/dbjpanda/convex-authz/commit/676a011fc1af3d608f8ba7559a8bb3ccd8d14500))
+* **custom-roles:** add client API surface ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([397c6e7](https://github.com/dbjpanda/convex-authz/commit/397c6e7d6817dfa717858696acb8302e47ce0400))
+* **custom-roles:** add CRUD mutations + queries for customRoles ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([37af26e](https://github.com/dbjpanda/convex-authz/commit/37af26e08767537c23a465a7680d1429bedccce2))
+* **custom-roles:** cascade-on-update fan-out to assigned users ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([6f49c04](https://github.com/dbjpanda/convex-authz/commit/6f49c048e29b76aa7a11061576ee4de4cf49b865))
+* **example:** wire custom roles into the demo app ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([cde7afc](https://github.com/dbjpanda/convex-authz/commit/cde7afc84eeebb2e04cab049b8dc11009cc9e61d))
+* **example:** wire grant/deny/removeOverride buttons into Permission Tester ([70cb96f](https://github.com/dbjpanda/convex-authz/commit/70cb96fa91b32a3de0e75e6d44f5e93e917455ce))
+* removeOverride API + example UI + extended tests (combines [#43](https://github.com/dbjpanda/convex-authz/issues/43)) ([6410e41](https://github.com/dbjpanda/convex-authz/commit/6410e41aabe5343038a5ce348e0e06b1bedb2e5e))
+* **schema:** add customRoles table and audit actions ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([a3d74aa](https://github.com/dbjpanda/convex-authz/commit/a3d74aaf88f73bbd5665de9a063990dc6c1f8635))
+* tenant-defined custom roles (closes [#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([43a238b](https://github.com/dbjpanda/convex-authz/commit/43a238b1fec017aafa536f736406727798cf98f7))
+
+
+### Bug Fixes
+
+* **custom-roles:** use convex-helpers paginator inside the component ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([488dabd](https://github.com/dbjpanda/convex-authz/commit/488dabde58c4be9f9fdc8ebd7b2544cf3c252a32))
+
+
+### Refactoring
+
+* **unified:** extract dual-write into tryExtend/writeNew helpers ([5f01a36](https://github.com/dbjpanda/convex-authz/commit/5f01a3620c244ee5063e966a14ad191abbae31cb)), closes [#31](https://github.com/dbjpanda/convex-authz/issues/31)
+
+
+### Documentation
+
+* **custom-roles:** README + CLAUDE.md updates + example app demo ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([84067f1](https://github.com/dbjpanda/convex-authz/commit/84067f1b9e786fe57f8566ef29c3786ccbb89fed))
+* **overrides:** expand "Removing Permission Overrides" with footgun warning ([6f1743b](https://github.com/dbjpanda/convex-authz/commit/6f1743b6e64ef0955b1acdad73b3d285e8e590af))
+* **skill:** sync SKILL.md with README custom-roles section ([#31](https://github.com/dbjpanda/convex-authz/issues/31)) ([d30be7b](https://github.com/dbjpanda/convex-authz/commit/d30be7b3b55af21a95271ddaf04ceaba191fe6c6))
+
 ## [2.3.2](https://github.com/dbjpanda/convex-authz/compare/v2.3.1...v2.3.2) (2026-05-08)
 
 
