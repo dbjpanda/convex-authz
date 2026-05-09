@@ -246,6 +246,87 @@ export function validateRoleAssignItems(
 }
 
 /**
+ * Validate a custom role id (the branded string returned from createCustomRole).
+ * Convex Id values are non-empty strings; runtime ownership is validated server-side.
+ */
+export function validateCustomRoleId(customRoleId: string): void {
+  if (typeof customRoleId !== "string") {
+    throw new Error("customRoleId must be a string");
+  }
+  if (customRoleId.trim().length === 0) {
+    throw new Error("customRoleId must be a non-empty string");
+  }
+}
+
+/**
+ * Validate a custom role name: non-empty trimmed string, max 200 chars.
+ */
+export function validateCustomRoleName(name: string): void {
+  if (typeof name !== "string") {
+    throw new Error("custom role name must be a string");
+  }
+  if (name.trim().length === 0) {
+    throw new Error("custom role name must be a non-empty string");
+  }
+  if (name.length > 200) {
+    throw new Error("custom role name must not exceed 200 characters");
+  }
+}
+
+/**
+ * Validate the grantablePermissions whitelist on the client config: array of
+ * non-empty strings. The actual whitelist enforcement happens server-side at
+ * createCustomRole / updateCustomRoleAction time.
+ */
+export function validateGrantablePermissions(
+  grantablePermissions: readonly string[],
+): void {
+  if (!Array.isArray(grantablePermissions)) {
+    throw new Error("customRoles.grantablePermissions must be an array");
+  }
+  if (grantablePermissions.length === 0) {
+    throw new Error(
+      "customRoles.grantablePermissions must not be empty when customRoles is enabled",
+    );
+  }
+  for (const p of grantablePermissions) {
+    if (typeof p !== "string" || p.trim().length === 0) {
+      throw new Error(
+        "customRoles.grantablePermissions entries must be non-empty strings",
+      );
+    }
+  }
+}
+
+/**
+ * Validate that a permission set being assigned to (or composed into) a custom
+ * role is a non-empty array of strings, each present in the whitelist. The
+ * server re-validates, but failing fast in the client gives better DX.
+ */
+export function validateCustomRolePermissions(
+  permissions: readonly string[],
+  grantablePermissions: readonly string[],
+): void {
+  if (!Array.isArray(permissions)) {
+    throw new Error("custom role permissions must be an array");
+  }
+  if (permissions.length === 0) {
+    throw new Error("custom role permissions must not be empty");
+  }
+  const allowed = new Set(grantablePermissions);
+  for (const p of permissions) {
+    if (typeof p !== "string" || p.trim().length === 0) {
+      throw new Error("custom role permissions must be non-empty strings");
+    }
+    if (!allowed.has(p)) {
+      throw new Error(
+        `Permission "${p}" is not in customRoles.grantablePermissions`,
+      );
+    }
+  }
+}
+
+/**
  * Validate relation args for hasRelation, addRelation, removeRelation: all non-empty strings.
  */
 export function validateRelationArgs(
