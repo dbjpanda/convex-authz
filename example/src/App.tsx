@@ -3,8 +3,9 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { DashboardPage } from "@/pages/dashboard";
 import { UsersPage } from "@/pages/users";
 import { PermissionTesterPage } from "@/pages/permission-tester";
+import { CustomRolesPage } from "@/pages/custom-roles";
 
-type Page = "dashboard" | "users" | "permission-tester";
+type Page = "dashboard" | "users" | "custom-roles" | "permission-tester";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("dashboard");
@@ -15,6 +16,8 @@ function App() {
         return <DashboardPage />;
       case "users":
         return <UsersPage />;
+      case "custom-roles":
+        return <CustomRolesPage />;
       case "permission-tester":
         return <PermissionTesterPage />;
       default:

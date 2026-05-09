@@ -12,6 +12,7 @@ import type * as app from "../app.js";
 import type * as benchmarkReal from "../benchmarkReal.js";
 import type * as constants from "../constants.js";
 import type * as consumerTests from "../consumerTests.js";
+import type * as customRolesExample from "../customRolesExample.js";
 import type * as example from "../example.js";
 import type * as http from "../http.js";
 import type * as liveFeatureTest from "../liveFeatureTest.js";
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   benchmarkReal: typeof benchmarkReal;
   constants: typeof constants;
   consumerTests: typeof consumerTests;
+  customRolesExample: typeof customRolesExample;
   example: typeof example;
   http: typeof http;
   liveFeatureTest: typeof liveFeatureTest;

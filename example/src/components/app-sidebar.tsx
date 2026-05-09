@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   Users,
+  Sparkles,
   TestTube,
   Shield,
   Moon,
@@ -19,6 +20,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { title: "Dashboard", icon: LayoutDashboard, page: "dashboard" },
   { title: "Users & Roles", icon: Users, page: "users" },
+  { title: "Custom Roles", icon: Sparkles, page: "custom-roles" },
   { title: "Permission Tester", icon: TestTube, page: "permission-tester" },
 ];
 
