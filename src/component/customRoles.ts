@@ -15,7 +15,8 @@
 import { v } from "convex/values";
 import { ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { mutation, query } from "./_generated/server.js";
+import { action, mutation, query } from "./_generated/server.js";
+import { api } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 
 const DEFAULT_MAX_ROLES_PER_TENANT = 100;
@@ -483,5 +484,100 @@ export const countCustomRoles = query({
       .withIndex("by_tenant", (q) => q.eq("tenantId", args.tenantId))
       .take(DEFAULT_MAX_ROLES_PER_TENANT * 2);
     return rows.length;
+  },
+});
+
+/**
+ * Update a custom role and cascade the change to every user holding it.
+ *
+ * Phase 1 (mutation): patches the customRoles row, validates the new
+ * permissions against `grantablePermissions`, and reports whether the
+ * permission set actually changed (set-equality, not array-equality).
+ *
+ * Phase 2 (cascade): if the permission set changed, walks every user with
+ * this role assigned and calls `recomputeUser` to re-materialize their
+ * `effectivePermissions`. Each user is one mutation transaction; the action
+ * iterates pages of 50 users at a time. If only the name/description changed,
+ * the cascade is skipped (no effective rows reference role names beyond the
+ * namespaced id, which is stable).
+ *
+ * Direct grants and direct denies on each user are preserved (recomputeUser
+ * keeps `directGrant === true` / `directDeny === true` rows).
+ */
+export const updateCustomRoleAction = action({
+  args: {
+    tenantId: v.string(),
+    customRoleId: v.id("customRoles"),
+    name: v.optional(v.string()),
+    permissions: v.optional(v.array(v.string())),
+    description: v.optional(v.string()),
+    grantablePermissions: v.array(v.string()),
+    rolePermissionsMap: v.record(v.string(), v.array(v.string())),
+    actorId: v.optional(v.string()),
+    enableAudit: v.optional(v.boolean()),
+    policyClassifications: v.optional(
+      v.record(
+        v.string(),
+        v.union(
+          v.null(),
+          v.literal("allow"),
+          v.literal("deny"),
+          v.literal("deferred"),
+        ),
+      ),
+    ),
+  },
+  returns: v.object({
+    permissionsChanged: v.boolean(),
+    usersRecomputed: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const updateResult: { permissions: string[]; permissionsChanged: boolean } =
+      await ctx.runMutation(api.customRoles.updateCustomRoleDefinition, {
+        customRoleId: args.customRoleId,
+        tenantId: args.tenantId,
+        name: args.name,
+        permissions: args.permissions,
+        description: args.description,
+        grantablePermissions: args.grantablePermissions,
+        actorId: args.actorId,
+        enableAudit: args.enableAudit,
+      });
+
+    if (!updateResult.permissionsChanged) {
+      return { permissionsChanged: false, usersRecomputed: 0 };
+    }
+
+    const role = customRoleStringFromId(args.customRoleId);
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+
+    while (true) {
+      const batch: {
+        userIds: string[];
+        isDone: boolean;
+        continueCursor: string;
+      } = await ctx.runQuery(api.unified.listUserIdsWithRole, {
+        tenantId: args.tenantId,
+        role,
+        paginationOpts: { numItems: 50, cursor },
+      });
+
+      for (const userId of batch.userIds) {
+        if (seen.has(userId)) continue;
+        seen.add(userId);
+        await ctx.runMutation(api.unified.recomputeUser, {
+          tenantId: args.tenantId,
+          userId,
+          rolePermissionsMap: args.rolePermissionsMap,
+          policyClassifications: args.policyClassifications,
+        });
+      }
+
+      if (batch.isDone) break;
+      cursor = batch.continueCursor;
+    }
+
+    return { permissionsChanged: true, usersRecomputed: seen.size };
   },
 });

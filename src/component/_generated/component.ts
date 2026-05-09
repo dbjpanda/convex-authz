@@ -146,6 +146,27 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      updateCustomRoleAction: FunctionReference<
+        "action",
+        "internal",
+        {
+          actorId?: string;
+          customRoleId: string;
+          description?: string;
+          enableAudit?: boolean;
+          grantablePermissions: Array<string>;
+          name?: string;
+          permissions?: Array<string>;
+          policyClassifications?: Record<
+            string,
+            null | "allow" | "deny" | "deferred"
+          >;
+          rolePermissionsMap: Record<string, Array<string>>;
+          tenantId: string;
+        },
+        { permissionsChanged: boolean; usersRecomputed: number },
+        Name
+      >;
       updateCustomRoleDefinition: FunctionReference<
         "mutation",
         "internal",

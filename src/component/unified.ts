@@ -1433,6 +1433,10 @@ export const recomputeUser = mutation({
       .take(4000);
 
     // ── Step 4: Rebuild effectiveRoles and effectivePermissions ──────────
+    // Cache resolved custom role permissions to avoid repeated lookups when a
+    // user holds the same custom role in multiple scopes.
+    const customRolePermsCache = new Map<string, string[]>();
+
     for (const assignment of roleAssignments) {
       // Skip expired assignments
       if (assignment.expiresAt !== undefined && assignment.expiresAt < now) {
@@ -1456,8 +1460,26 @@ export const recomputeUser = mutation({
         updatedAt: now,
       });
 
-      // Look up permissions for this role from rolePermissionsMap
-      const permissions = args.rolePermissionsMap[assignment.role] ?? [];
+      // Look up permissions for this role. System roles come from the caller-
+      // supplied map. Custom roles ("custom:<id>") are resolved against the
+      // customRoles table directly so callers don't have to pre-build a map
+      // that includes every tenant's custom roles.
+      let permissions: string[];
+      if (assignment.role.startsWith("custom:")) {
+        if (customRolePermsCache.has(assignment.role)) {
+          permissions = customRolePermsCache.get(assignment.role)!;
+        } else {
+          const customRoleId = assignment.role.slice("custom:".length) as Id<"customRoles">;
+          const customRole = await ctx.db.get(customRoleId);
+          permissions =
+            customRole !== null && customRole.tenantId === args.tenantId
+              ? customRole.permissions
+              : [];
+          customRolePermsCache.set(assignment.role, permissions);
+        }
+      } else {
+        permissions = args.rolePermissionsMap[assignment.role] ?? [];
+      }
 
       for (const permission of permissions) {
         const classification = args.policyClassifications?.[permission] ?? null;
