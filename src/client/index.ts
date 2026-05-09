@@ -28,8 +28,10 @@ import type {
   GenericDataModel,
   GenericMutationCtx,
   GenericQueryCtx,
+  PaginationResult,
 } from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
+import type { Id } from "../component/_generated/dataModel.js";
 import {
   validateTenantId,
   validateUserId,
@@ -43,6 +45,10 @@ import {
   validatePermissions,
   validateRoleAssignItems,
   validateRoles,
+  validateCustomRoleId,
+  validateCustomRoleName,
+  validateGrantablePermissions,
+  validateCustomRolePermissions,
   type RoleAssignItem,
   type RoleScopeItem,
 } from "./validation.js";
@@ -192,6 +198,65 @@ export interface Scope {
   type: string;
   id: string;
 }
+
+// ============================================================================
+// Custom Roles (tenant-defined, optional opt-in)
+// ============================================================================
+
+/**
+ * Branded id for a tenant-defined custom role. Returned by `createCustomRole`
+ * and accepted by `assignCustomRole`/`revokeCustomRole`/etc. Cannot be confused
+ * with a system role name (which is `keyof R & string`) at compile time —
+ * passing a raw string where a `CustomRoleId` is expected is a TS error.
+ */
+export type CustomRoleId = Id<"customRoles">;
+
+/**
+ * Opt-in configuration for tenant-defined custom roles.
+ *
+ * - `enabled` — must be `true` to enable the feature
+ * - `grantablePermissions` — the SaaS-provider-defined whitelist of
+ *   permission strings that tenant admins are allowed to compose into
+ *   custom roles. Tenants can compose existing permissions; they cannot
+ *   invent new ones. Validated at create/update time.
+ * - `maxRolesPerTenant` — optional cap (default 100) on the number of
+ *   custom role definitions per tenant
+ *
+ * When omitted, the feature is disabled and no custom-role methods are
+ * usable. Existing methods (`assignRole`, `can`, etc.) are unchanged.
+ */
+export interface CustomRolesConfig<P extends PermissionDefinition> {
+  enabled: true;
+  grantablePermissions: ReadonlyArray<PermissionArg<P>>;
+  maxRolesPerTenant?: number;
+}
+
+/** Shape of a custom role row returned by listCustomRoles / getCustomRole. */
+export interface CustomRoleDoc {
+  _id: CustomRoleId;
+  _creationTime: number;
+  tenantId: string;
+  name: string;
+  permissions: string[];
+  description?: string;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Discriminated user-role entry. System roles carry a typed name; custom
+ * roles carry their branded id and human-readable name.
+ */
+export type UserRoleEntry<R extends RoleDefinition<PermissionDefinition>> =
+  | { source: "system"; role: keyof R & string; scope?: Scope; expiresAt?: number }
+  | {
+      source: "custom";
+      customRoleId: CustomRoleId;
+      name: string;
+      scope?: Scope;
+      expiresAt?: number;
+    };
 
 // ============================================================================
 // Helper Functions
@@ -446,9 +511,28 @@ export class Authz<
       tenantId: string;
       // v2:
       relationPermissions?: RelationPermissionMap;
+      // v2.4: opt-in tenant-defined custom roles
+      customRoles?: CustomRolesConfig<P>;
     }
   ) {
     validateTenantId(options.tenantId);
+    if (options.customRoles?.enabled) {
+      validateGrantablePermissions(options.customRoles.grantablePermissions);
+    }
+  }
+
+  /**
+   * Internal: throws if the customRoles feature is not enabled. All custom-
+   * role methods call this first so the failure mode is "feature not configured"
+   * rather than a confusing downstream error.
+   */
+  private requireCustomRolesEnabled(): CustomRolesConfig<P> {
+    if (!this.options.customRoles?.enabled) {
+      throw new Error(
+        "customRoles feature is not enabled. Pass `customRoles: { enabled: true, grantablePermissions: [...] }` to the Authz constructor.",
+      );
+    }
+    return this.options.customRoles;
   }
 
   withTenant(tenantId: string): Authz<P, R, Policy> {
@@ -768,6 +852,246 @@ export class Authz<
       revokedBy: actorId ?? this.options.defaultActorId,
       enableAudit: true,
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Custom Roles (opt-in via `customRoles` constructor option)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Create a tenant-defined custom role composed from the configured
+   * `grantablePermissions` whitelist. Returns the branded `CustomRoleId`.
+   *
+   * Throws if any requested permission is not in the whitelist, the tenant
+   * has reached `maxRolesPerTenant`, or a role with this name already
+   * exists in the tenant.
+   */
+  async createCustomRole(
+    ctx: MutationCtx | ActionCtx,
+    args: {
+      name: string;
+      permissions: ReadonlyArray<PermissionArg<P>>;
+      description?: string;
+      createdBy: string;
+    },
+  ): Promise<CustomRoleId> {
+    const config = this.requireCustomRolesEnabled();
+    validateCustomRoleName(args.name);
+    validateUserId(args.createdBy);
+    validateCustomRolePermissions(
+      args.permissions as readonly string[],
+      config.grantablePermissions as readonly string[],
+    );
+    const id = await ctx.runMutation(
+      this.component.customRoles.createCustomRole,
+      {
+        tenantId: this.options.tenantId,
+        name: args.name,
+        permissions: args.permissions as string[],
+        description: args.description,
+        createdBy: args.createdBy,
+        grantablePermissions: config.grantablePermissions as string[],
+        maxRolesPerTenant: config.maxRolesPerTenant,
+        enableAudit: true,
+      },
+    );
+    return id as CustomRoleId;
+  }
+
+  /**
+   * Update a custom role. If `permissions` changes, every user holding the
+   * role is re-materialized via `recomputeUser`. Returns whether the
+   * permission set actually changed and how many users were recomputed.
+   *
+   * No-op edits (set-equal permissions, name/description only) skip the
+   * fan-out entirely.
+   */
+  async updateCustomRole(
+    ctx: ActionCtx,
+    args: {
+      customRoleId: CustomRoleId;
+      name?: string;
+      permissions?: ReadonlyArray<PermissionArg<P>>;
+      description?: string;
+      actorId?: string;
+    },
+  ): Promise<{ permissionsChanged: boolean; usersRecomputed: number }> {
+    const config = this.requireCustomRolesEnabled();
+    validateCustomRoleId(args.customRoleId);
+    if (args.name !== undefined) validateCustomRoleName(args.name);
+    if (args.permissions !== undefined) {
+      validateCustomRolePermissions(
+        args.permissions as readonly string[],
+        config.grantablePermissions as readonly string[],
+      );
+    }
+    return await ctx.runAction(
+      this.component.customRoles.updateCustomRoleAction,
+      {
+        tenantId: this.options.tenantId,
+        customRoleId: args.customRoleId,
+        name: args.name,
+        permissions: args.permissions as string[] | undefined,
+        description: args.description,
+        grantablePermissions: config.grantablePermissions as string[],
+        rolePermissionsMap: this.buildRolePermissionsMap(),
+        actorId: args.actorId ?? this.options.defaultActorId,
+        enableAudit: true,
+      },
+    );
+  }
+
+  /**
+   * Delete a custom role. Refuses by default if any user currently holds
+   * the role; pass `force: true` to revoke all assignments and clean up
+   * the materialized rows transactionally.
+   */
+  async deleteCustomRole(
+    ctx: MutationCtx | ActionCtx,
+    args: {
+      customRoleId: CustomRoleId;
+      force?: boolean;
+      actorId?: string;
+    },
+  ): Promise<{
+    deleted: boolean;
+    assignmentsRevoked: number;
+    effectiveRolesRemoved: number;
+    effectivePermissionsRemoved: number;
+  }> {
+    this.requireCustomRolesEnabled();
+    validateCustomRoleId(args.customRoleId);
+    return await ctx.runMutation(
+      this.component.customRoles.deleteCustomRole,
+      {
+        tenantId: this.options.tenantId,
+        customRoleId: args.customRoleId,
+        force: args.force,
+        actorId: args.actorId ?? this.options.defaultActorId,
+        enableAudit: true,
+      },
+    );
+  }
+
+  /**
+   * List custom roles for the current tenant (paginated).
+   */
+  async listCustomRoles(
+    ctx: QueryCtx | ActionCtx,
+    paginationOpts: { numItems: number; cursor: string | null } = {
+      numItems: 100,
+      cursor: null,
+    },
+  ): Promise<PaginationResult<CustomRoleDoc>> {
+    this.requireCustomRolesEnabled();
+    const result = await ctx.runQuery(
+      this.component.customRoles.listCustomRoles,
+      {
+        tenantId: this.options.tenantId,
+        paginationOpts,
+      },
+    );
+    return result as PaginationResult<CustomRoleDoc>;
+  }
+
+  /**
+   * Fetch a single custom role by id. Returns null if it does not exist or
+   * belongs to a different tenant.
+   */
+  async getCustomRole(
+    ctx: QueryCtx | ActionCtx,
+    customRoleId: CustomRoleId,
+  ): Promise<CustomRoleDoc | null> {
+    this.requireCustomRolesEnabled();
+    validateCustomRoleId(customRoleId);
+    const row = await ctx.runQuery(
+      this.component.customRoles.getCustomRole,
+      {
+        tenantId: this.options.tenantId,
+        customRoleId,
+      },
+    );
+    return row as CustomRoleDoc | null;
+  }
+
+  /**
+   * Look up a custom role by its human-readable name within the current
+   * tenant.
+   */
+  async getCustomRoleByName(
+    ctx: QueryCtx | ActionCtx,
+    name: string,
+  ): Promise<CustomRoleDoc | null> {
+    this.requireCustomRolesEnabled();
+    validateCustomRoleName(name);
+    const row = await ctx.runQuery(
+      this.component.customRoles.getCustomRoleByName,
+      {
+        tenantId: this.options.tenantId,
+        name,
+      },
+    );
+    return row as CustomRoleDoc | null;
+  }
+
+  /**
+   * Assign a custom role to a user. Permissions are snapshotted from the
+   * customRoles row at assignment time; subsequent edits to the role
+   * propagate via `updateCustomRole`'s cascade.
+   */
+  async assignCustomRole(
+    ctx: MutationCtx | ActionCtx,
+    userId: string,
+    customRoleId: CustomRoleId,
+    scope?: Scope,
+    expiresAt?: number,
+    actorId?: string,
+  ): Promise<string> {
+    this.requireCustomRolesEnabled();
+    validateUserId(userId);
+    validateCustomRoleId(customRoleId);
+    validateScope(scope);
+    validateOptionalExpiresAt(expiresAt);
+    return await ctx.runMutation(
+      this.component.unified.assignCustomRoleUnified,
+      {
+        tenantId: this.options.tenantId,
+        userId,
+        customRoleId,
+        scope,
+        expiresAt,
+        assignedBy: actorId ?? this.options.defaultActorId,
+        enableAudit: true,
+      },
+    );
+  }
+
+  /**
+   * Revoke a custom role from a user. Idempotent — returns false if the
+   * user doesn't currently hold the role.
+   */
+  async revokeCustomRole(
+    ctx: MutationCtx | ActionCtx,
+    userId: string,
+    customRoleId: CustomRoleId,
+    scope?: Scope,
+    actorId?: string,
+  ): Promise<boolean> {
+    this.requireCustomRolesEnabled();
+    validateUserId(userId);
+    validateCustomRoleId(customRoleId);
+    validateScope(scope);
+    return await ctx.runMutation(
+      this.component.unified.revokeCustomRoleUnified,
+      {
+        tenantId: this.options.tenantId,
+        userId,
+        customRoleId,
+        scope,
+        revokedBy: actorId ?? this.options.defaultActorId,
+        enableAudit: true,
+      },
+    );
   }
 
   /**

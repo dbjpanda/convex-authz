@@ -9,6 +9,7 @@
  */
 
 import type * as cronSetup from "../cronSetup.js";
+import type * as customRoles from "../customRoles.js";
 import type * as helpers from "../helpers.js";
 import type * as indexed from "../indexed.js";
 import type * as mutations from "../mutations.js";
@@ -26,6 +27,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   cronSetup: typeof cronSetup;
+  customRoles: typeof customRoles;
   helpers: typeof helpers;
   indexed: typeof indexed;
   mutations: typeof mutations;

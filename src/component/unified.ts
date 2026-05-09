@@ -10,10 +10,12 @@
  *   3. No match -> denied
  */
 
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { action, mutation, query } from "./_generated/server.js";
 import { api } from "./_generated/api.js";
+import type { MutationCtx } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
 import { scopeValidator } from "./validators.js";
 import { isExpired, matchesPermissionPattern } from "./helpers.js";
 import { paginator } from "convex-helpers/server/pagination";
@@ -31,6 +33,334 @@ function scopeEquals(
   if (a === undefined && b === undefined) return true;
   if (a === undefined || b === undefined) return false;
   return a.type === b.type && a.id === b.id;
+}
+
+type PolicyClassification = "allow" | "deny" | "deferred" | null;
+
+/**
+ * Inputs to the dual-write helpers below. Both system-role and custom-role
+ * assignments funnel through these — the only difference is what `role`
+ * looks like ("admin" vs. "custom:abc123") and where `rolePermissions`
+ * came from.
+ */
+type AssignmentInputs = {
+  tenantId: string;
+  userId: string;
+  role: string;
+  rolePermissions: string[];
+  scope: { type: string; id: string } | undefined;
+  scopeKey: string;
+  expiresAt: number | undefined;
+  assignedBy: string | undefined;
+  metadata: unknown;
+  policyClassifications:
+    | Record<string, PolicyClassification>
+    | undefined;
+  now: number;
+};
+
+/**
+ * If a non-expired assignment for (tenant, user, role, scope) already exists,
+ * extend its expiry to `args.expiresAt` (no-op if the new expiry is shorter)
+ * and dual-write the new expiry into `effectiveRoles` and the matching
+ * `effectivePermissions` rows. Returns the existing assignment id.
+ *
+ * Returns null when no duplicate is present and the caller should proceed to
+ * `writeNewAssignment`.
+ *
+ * Extracted from the historic inline duplicate-detection logic so that
+ * `assignRoleUnified`, `assignRolesUnified`, and `assignCustomRoleUnified`
+ * can share a single source of truth for idempotency semantics.
+ */
+async function tryExtendExistingAssignment(
+  ctx: MutationCtx,
+  args: AssignmentInputs,
+): Promise<Id<"roleAssignments"> | null> {
+  const existing = await ctx.db
+    .query("roleAssignments")
+    .withIndex("by_tenant_user_and_role", (q) =>
+      q
+        .eq("tenantId", args.tenantId)
+        .eq("userId", args.userId)
+        .eq("role", args.role),
+    )
+    .take(100);
+
+  for (const row of existing) {
+    if (!scopeEquals(row.scope, args.scope) || isExpired(row.expiresAt)) {
+      continue;
+    }
+
+    // Extend expiry: only update if new value is later or removes expiry entirely.
+    // Passing a shorter expiresAt is a no-op (prevents accidental expiry reduction).
+    // To shorten expiry, revoke and re-assign.
+    const shouldExtend =
+      args.expiresAt === undefined ||
+      (row.expiresAt !== undefined && args.expiresAt > row.expiresAt);
+    if (!shouldExtend || args.expiresAt === row.expiresAt) {
+      return row._id;
+    }
+
+    const newExpiry = args.expiresAt;
+
+    // 1. Source row
+    await ctx.db.patch(row._id, { expiresAt: newExpiry });
+
+    // 2. effectiveRoles
+    const effRole = await ctx.db
+      .query("effectiveRoles")
+      .withIndex("by_tenant_user_role_scope", (q) =>
+        q
+          .eq("tenantId", args.tenantId)
+          .eq("userId", args.userId)
+          .eq("role", args.role)
+          .eq("scopeKey", args.scopeKey),
+      )
+      .unique();
+    if (effRole) {
+      await ctx.db.patch(effRole._id, {
+        expiresAt: newExpiry,
+        updatedAt: args.now,
+      });
+    }
+
+    // 3. effectivePermissions where this role is one of the sources
+    for (const permission of args.rolePermissions) {
+      const effPerm = await ctx.db
+        .query("effectivePermissions")
+        .withIndex("by_tenant_user_permission_scope", (q) =>
+          q
+            .eq("tenantId", args.tenantId)
+            .eq("userId", args.userId)
+            .eq("permission", permission)
+            .eq("scopeKey", args.scopeKey),
+        )
+        .unique();
+      if (effPerm && effPerm.sources.includes(args.role)) {
+        const mergedExpiry =
+          effPerm.expiresAt === undefined || newExpiry === undefined
+            ? undefined
+            : Math.max(effPerm.expiresAt, newExpiry);
+        await ctx.db.patch(effPerm._id, {
+          expiresAt: mergedExpiry,
+          updatedAt: args.now,
+        });
+      }
+    }
+
+    return row._id;
+  }
+
+  return null;
+}
+
+/**
+ * Revoke a single (user, role, scope) assignment, dual-writing the deletion
+ * to `effectiveRoles` and removing this role from `effectivePermissions.sources`
+ * (deleting the row entirely when no other sources / direct grants remain).
+ *
+ * Returns true if a matching assignment was found and revoked, false if no
+ * such assignment existed.
+ */
+async function revokeAssignmentDualWrite(
+  ctx: MutationCtx,
+  args: {
+    tenantId: string;
+    userId: string;
+    role: string;
+    rolePermissions: string[];
+    scope: { type: string; id: string } | undefined;
+    scopeKey: string;
+    now: number;
+  },
+): Promise<boolean> {
+  const assignments = await ctx.db
+    .query("roleAssignments")
+    .withIndex("by_tenant_user_and_role", (q) =>
+      q
+        .eq("tenantId", args.tenantId)
+        .eq("userId", args.userId)
+        .eq("role", args.role),
+    )
+    .take(100);
+
+  const assignment = assignments.find((row) =>
+    scopeEquals(row.scope, args.scope),
+  );
+
+  if (!assignment) return false;
+
+  // 1. Source row
+  await ctx.db.delete(assignment._id);
+
+  // 2. effectiveRoles row
+  const effectiveRole = await ctx.db
+    .query("effectiveRoles")
+    .withIndex("by_tenant_user_role_scope", (q) =>
+      q
+        .eq("tenantId", args.tenantId)
+        .eq("userId", args.userId)
+        .eq("role", args.role)
+        .eq("scopeKey", args.scopeKey),
+    )
+    .unique();
+  if (effectiveRole) {
+    await ctx.db.delete(effectiveRole._id);
+  }
+
+  // 3. effectivePermissions: remove this role from sources, deleting the row
+  //    entirely if no other sources and no direct grant/deny remain.
+  for (const permission of args.rolePermissions) {
+    const effectivePerm = await ctx.db
+      .query("effectivePermissions")
+      .withIndex("by_tenant_user_permission_scope", (q) =>
+        q
+          .eq("tenantId", args.tenantId)
+          .eq("userId", args.userId)
+          .eq("permission", permission)
+          .eq("scopeKey", args.scopeKey),
+      )
+      .unique();
+
+    if (!effectivePerm) continue;
+
+    const updatedSources = effectivePerm.sources.filter(
+      (s) => s !== args.role,
+    );
+
+    if (
+      updatedSources.length === 0 &&
+      !effectivePerm.directGrant &&
+      !effectivePerm.directDeny
+    ) {
+      await ctx.db.delete(effectivePerm._id);
+    } else if (updatedSources.length !== effectivePerm.sources.length) {
+      await ctx.db.patch(effectivePerm._id, {
+        sources: updatedSources,
+        updatedAt: args.now,
+      });
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Insert a fresh `roleAssignments` row and dual-write into `effectiveRoles`
+ * + `effectivePermissions`. Caller must have already confirmed (via
+ * `tryExtendExistingAssignment`) that no live duplicate exists.
+ */
+async function writeNewAssignment(
+  ctx: MutationCtx,
+  args: AssignmentInputs,
+): Promise<Id<"roleAssignments">> {
+  // 1. Source of truth
+  const assignmentId = await ctx.db.insert("roleAssignments", {
+    tenantId: args.tenantId,
+    userId: args.userId,
+    role: args.role,
+    scope: args.scope,
+    expiresAt: args.expiresAt,
+    assignedBy: args.assignedBy,
+    metadata: args.metadata,
+  });
+
+  // 2. effectiveRoles upsert
+  const existingEffectiveRole = await ctx.db
+    .query("effectiveRoles")
+    .withIndex("by_tenant_user_role_scope", (q) =>
+      q
+        .eq("tenantId", args.tenantId)
+        .eq("userId", args.userId)
+        .eq("role", args.role)
+        .eq("scopeKey", args.scopeKey),
+    )
+    .unique();
+
+  if (existingEffectiveRole) {
+    await ctx.db.patch(existingEffectiveRole._id, {
+      assignedBy: args.assignedBy,
+      expiresAt: args.expiresAt,
+      updatedAt: args.now,
+    });
+  } else {
+    await ctx.db.insert("effectiveRoles", {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role: args.role,
+      scopeKey: args.scopeKey,
+      scope: args.scope,
+      assignedBy: args.assignedBy,
+      expiresAt: args.expiresAt,
+      createdAt: args.now,
+      updatedAt: args.now,
+    });
+  }
+
+  // 3. effectivePermissions: one row per granted permission, with this role
+  //    appended to `sources` (or inserted fresh).
+  for (const permission of args.rolePermissions) {
+    const classification =
+      args.policyClassifications?.[permission] ?? null;
+
+    // Skip permissions where policy evaluated to "deny"
+    if (classification === "deny") continue;
+
+    const existingPerm = await ctx.db
+      .query("effectivePermissions")
+      .withIndex("by_tenant_user_permission_scope", (q) =>
+        q
+          .eq("tenantId", args.tenantId)
+          .eq("userId", args.userId)
+          .eq("permission", permission)
+          .eq("scopeKey", args.scopeKey),
+      )
+      .unique();
+
+    if (existingPerm) {
+      const sources = existingPerm.sources.includes(args.role)
+        ? existingPerm.sources
+        : [...existingPerm.sources, args.role];
+      const patchData: Record<string, unknown> = {
+        sources,
+        updatedAt: args.now,
+      };
+      if (classification === "deferred" && !existingPerm.policyResult) {
+        patchData.policyResult = "deferred";
+        patchData.policyName = permission;
+      } else if (classification === "allow" && !existingPerm.policyResult) {
+        patchData.policyResult = "allow";
+      }
+      // Merged expiresAt: no-expiry (undefined) wins over any expiry
+      const existingExpiry = existingPerm.expiresAt;
+      const newExpiry = args.expiresAt;
+      patchData.expiresAt =
+        existingExpiry === undefined || newExpiry === undefined
+          ? undefined
+          : Math.max(existingExpiry, newExpiry);
+      await ctx.db.patch(existingPerm._id, patchData);
+    } else {
+      await ctx.db.insert("effectivePermissions", {
+        tenantId: args.tenantId,
+        userId: args.userId,
+        permission,
+        scopeKey: args.scopeKey,
+        scope: args.scope,
+        effect: "allow",
+        sources: [args.role],
+        expiresAt: args.expiresAt,
+        createdAt: args.now,
+        updatedAt: args.now,
+        ...(classification === "deferred"
+          ? { policyResult: "deferred" as const, policyName: permission }
+          : classification === "allow"
+            ? { policyResult: "allow" as const }
+            : {}),
+      });
+    }
+  }
+
+  return assignmentId;
 }
 
 export const checkPermission = query({
@@ -238,182 +568,29 @@ export const assignRoleUnified = mutation({
   returns: v.string(),
   handler: async (ctx, args) => {
     const now = Date.now();
-
-    // 1. Compute scopeKey
     const scopeKey = args.scope
       ? `${args.scope.type}:${args.scope.id}`
       : "global";
-
-    // 2. Check for duplicate in roleAssignments
-    const existing = await ctx.db
-      .query("roleAssignments")
-      .withIndex("by_tenant_user_and_role", (q) =>
-        q
-          .eq("tenantId", args.tenantId)
-          .eq("userId", args.userId)
-          .eq("role", args.role)
-      )
-      .take(100);
-
-    for (const row of existing) {
-      if (scopeEquals(row.scope, args.scope) && !isExpired(row.expiresAt)) {
-        // Extend expiry: only update if new value is later or removes expiry entirely.
-        // Passing a shorter expiresAt is a no-op (prevents accidental expiry reduction).
-        // To shorten expiry, revoke and re-assign.
-        const shouldExtend = args.expiresAt === undefined ||
-          (row.expiresAt !== undefined && args.expiresAt > row.expiresAt);
-        if (shouldExtend && args.expiresAt !== row.expiresAt) {
-          const newExpiry = args.expiresAt;
-          // 1. Update source table
-          await ctx.db.patch(row._id, { expiresAt: newExpiry });
-          // 2. Update effectiveRoles
-          const scopeKey = args.scope
-            ? `${args.scope.type}:${args.scope.id}`
-            : "global";
-          const effRole = await ctx.db
-            .query("effectiveRoles")
-            .withIndex("by_tenant_user_role_scope", (q) =>
-              q.eq("tenantId", args.tenantId)
-                .eq("userId", args.userId)
-                .eq("role", args.role)
-                .eq("scopeKey", scopeKey)
-            )
-            .unique();
-          if (effRole) {
-            await ctx.db.patch(effRole._id, { expiresAt: newExpiry, updatedAt: Date.now() });
-          }
-          // 3. Update effectivePermissions for this role's permissions
-          for (const permission of args.rolePermissions) {
-            const effPerm = await ctx.db
-              .query("effectivePermissions")
-              .withIndex("by_tenant_user_permission_scope", (q) =>
-                q.eq("tenantId", args.tenantId)
-                  .eq("userId", args.userId)
-                  .eq("permission", permission)
-                  .eq("scopeKey", scopeKey)
-              )
-              .unique();
-            if (effPerm && effPerm.sources.includes(args.role)) {
-              // Recompute merged expiresAt considering all sources
-              // Since we can't cheaply check all other sources' expiry,
-              // just set to the new (extended) value
-              const mergedExpiry = effPerm.expiresAt === undefined ? undefined
-                : newExpiry === undefined ? undefined
-                : Math.max(effPerm.expiresAt, newExpiry);
-              await ctx.db.patch(effPerm._id, { expiresAt: mergedExpiry, updatedAt: Date.now() });
-            }
-          }
-        }
-        return row._id;
-      }
-    }
-
-    // 3. Insert into roleAssignments (source of truth)
-    const assignmentId = await ctx.db.insert("roleAssignments", {
+    const inputs: AssignmentInputs = {
       tenantId: args.tenantId,
       userId: args.userId,
       role: args.role,
+      rolePermissions: args.rolePermissions,
       scope: args.scope,
+      scopeKey,
       expiresAt: args.expiresAt,
       assignedBy: args.assignedBy,
       metadata: args.metadata,
-    });
+      policyClassifications: args.policyClassifications,
+      now,
+    };
 
-    // 4. Upsert into effectiveRoles
-    const existingEffectiveRole = await ctx.db
-      .query("effectiveRoles")
-      .withIndex("by_tenant_user_role_scope", (q) =>
-        q
-          .eq("tenantId", args.tenantId)
-          .eq("userId", args.userId)
-          .eq("role", args.role)
-          .eq("scopeKey", scopeKey)
-      )
-      .unique();
+    // Idempotent re-assign: extend the existing assignment's expiry if any.
+    const existingId = await tryExtendExistingAssignment(ctx, inputs);
+    if (existingId !== null) return existingId;
 
-    if (existingEffectiveRole) {
-      await ctx.db.patch(existingEffectiveRole._id, {
-        assignedBy: args.assignedBy,
-        expiresAt: args.expiresAt,
-        updatedAt: now,
-      });
-    } else {
-      await ctx.db.insert("effectiveRoles", {
-        tenantId: args.tenantId,
-        userId: args.userId,
-        role: args.role,
-        scopeKey,
-        scope: args.scope,
-        assignedBy: args.assignedBy,
-        expiresAt: args.expiresAt,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
+    const assignmentId = await writeNewAssignment(ctx, inputs);
 
-    // 5. Process each permission in rolePermissions
-    for (const permission of args.rolePermissions) {
-      const classification = args.policyClassifications?.[permission] ?? null;
-
-      // Skip permissions where policy evaluated to "deny"
-      if (classification === "deny") {
-        continue;
-      }
-
-      const existingPerm = await ctx.db
-        .query("effectivePermissions")
-        .withIndex("by_tenant_user_permission_scope", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("permission", permission)
-            .eq("scopeKey", scopeKey)
-        )
-        .unique();
-
-      if (existingPerm) {
-        // Add role to sources if not already present
-        const sources = existingPerm.sources.includes(args.role)
-          ? existingPerm.sources
-          : [...existingPerm.sources, args.role];
-        // Also update policyResult if the new classification is more specific
-        const patchData: Record<string, unknown> = { sources, updatedAt: now };
-        if (classification === "deferred" && !existingPerm.policyResult) {
-          patchData.policyResult = "deferred";
-          patchData.policyName = permission;
-        } else if (classification === "allow" && !existingPerm.policyResult) {
-          patchData.policyResult = "allow";
-        }
-        // Compute merged expiresAt: no-expiry (undefined) wins over any expiry
-        const existingExpiry = existingPerm.expiresAt;
-        const newExpiry = args.expiresAt;
-        const mergedExpiresAt = existingExpiry === undefined || newExpiry === undefined
-          ? undefined
-          : Math.max(existingExpiry, newExpiry);
-        patchData.expiresAt = mergedExpiresAt;
-        await ctx.db.patch(existingPerm._id, patchData);
-      } else {
-        await ctx.db.insert("effectivePermissions", {
-          tenantId: args.tenantId,
-          userId: args.userId,
-          permission,
-          scopeKey,
-          scope: args.scope,
-          effect: "allow",
-          sources: [args.role],
-          expiresAt: args.expiresAt,
-          createdAt: now,
-          updatedAt: now,
-          ...(classification === "deferred"
-            ? { policyResult: "deferred", policyName: permission }
-            : classification === "allow"
-              ? { policyResult: "allow" }
-              : {}),
-        });
-      }
-    }
-
-    // 6. Audit log
     if (args.enableAudit) {
       await ctx.db.insert("auditLog", {
         tenantId: args.tenantId,
@@ -428,7 +605,6 @@ export const assignRoleUnified = mutation({
       });
     }
 
-    // 7. Return assignment ID
     return assignmentId;
   },
 });
@@ -452,82 +628,22 @@ export const revokeRoleUnified = mutation({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const now = Date.now();
-
-    // 1. Compute scopeKey
     const scopeKey = args.scope
       ? `${args.scope.type}:${args.scope.id}`
       : "global";
 
-    // 2. Find the role assignment in roleAssignments
-    const assignments = await ctx.db
-      .query("roleAssignments")
-      .withIndex("by_tenant_user_and_role", (q) =>
-        q
-          .eq("tenantId", args.tenantId)
-          .eq("userId", args.userId)
-          .eq("role", args.role)
-      )
-      .take(100);
+    const revoked = await revokeAssignmentDualWrite(ctx, {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role: args.role,
+      rolePermissions: args.rolePermissions,
+      scope: args.scope,
+      scopeKey,
+      now,
+    });
 
-    const assignment = assignments.find(
-      (row) => scopeEquals(row.scope, args.scope)
-    );
+    if (!revoked) return false;
 
-    if (!assignment) {
-      return false;
-    }
-
-    // 3. Delete from roleAssignments
-    await ctx.db.delete(assignment._id);
-
-    // 4. Delete from effectiveRoles
-    const effectiveRole = await ctx.db
-      .query("effectiveRoles")
-      .withIndex("by_tenant_user_role_scope", (q) =>
-        q
-          .eq("tenantId", args.tenantId)
-          .eq("userId", args.userId)
-          .eq("role", args.role)
-          .eq("scopeKey", scopeKey)
-      )
-      .unique();
-
-    if (effectiveRole) {
-      await ctx.db.delete(effectiveRole._id);
-    }
-
-    // 5. For each permission the revoked role granted, update effectivePermissions
-    for (const permission of args.rolePermissions) {
-      const effectivePerm = await ctx.db
-        .query("effectivePermissions")
-        .withIndex("by_tenant_user_permission_scope", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("permission", permission)
-            .eq("scopeKey", scopeKey)
-        )
-        .unique();
-
-      if (!effectivePerm) continue;
-
-      const updatedSources = effectivePerm.sources.filter(
-        (s) => s !== args.role
-      );
-
-      if (updatedSources.length === 0 && !effectivePerm.directGrant && !effectivePerm.directDeny) {
-        // No more sources, no direct grant, no direct deny — delete the row
-        await ctx.db.delete(effectivePerm._id);
-      } else if (updatedSources.length !== effectivePerm.sources.length) {
-        // Role was in sources; patch with updated array
-        await ctx.db.patch(effectivePerm._id, {
-          sources: updatedSources,
-          updatedAt: now,
-        });
-      }
-    }
-
-    // 6. Audit log
     if (args.enableAudit) {
       await ctx.db.insert("auditLog", {
         tenantId: args.tenantId,
@@ -542,7 +658,169 @@ export const revokeRoleUnified = mutation({
       });
     }
 
-    // 7. Return true
+    return true;
+  },
+});
+
+/**
+ * Unified Custom Role Assignment
+ *
+ * Assigns a tenant-defined custom role to a user. The custom role row is
+ * looked up first (validating tenant ownership), its snapshot permissions are
+ * read, and the same dual-write helpers used by `assignRoleUnified` do the
+ * rest. The role is stored in `roleAssignments.role` and `effectiveRoles.role`
+ * as the namespaced string `"custom:<id>"`, which keeps the read path
+ * (`hasRoleFast`, `checkPermissionFast`) treating system and custom roles
+ * identically.
+ *
+ * Throws `CUSTOM_ROLE_NOT_FOUND` if the role does not exist or belongs to a
+ * different tenant.
+ */
+export const assignCustomRoleUnified = mutation({
+  args: {
+    tenantId: v.string(),
+    userId: v.string(),
+    customRoleId: v.id("customRoles"),
+    scope: scopeValidator,
+    expiresAt: v.optional(v.number()),
+    assignedBy: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+    enableAudit: v.optional(v.boolean()),
+    policyClassifications: v.optional(
+      v.record(
+        v.string(),
+        v.union(
+          v.null(),
+          v.literal("allow"),
+          v.literal("deny"),
+          v.literal("deferred"),
+        ),
+      ),
+    ),
+  },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    const customRole = await ctx.db.get(args.customRoleId);
+    if (customRole === null || customRole.tenantId !== args.tenantId) {
+      throw new ConvexError({
+        code: "CUSTOM_ROLE_NOT_FOUND",
+        message: "Custom role does not exist in this tenant",
+        customRoleId: args.customRoleId,
+      });
+    }
+
+    const role = `custom:${args.customRoleId}`;
+    const scopeKey = args.scope
+      ? `${args.scope.type}:${args.scope.id}`
+      : "global";
+
+    const inputs: AssignmentInputs = {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role,
+      rolePermissions: customRole.permissions,
+      scope: args.scope,
+      scopeKey,
+      expiresAt: args.expiresAt,
+      assignedBy: args.assignedBy,
+      metadata: args.metadata,
+      policyClassifications: args.policyClassifications,
+      now,
+    };
+
+    const existingId = await tryExtendExistingAssignment(ctx, inputs);
+    if (existingId !== null) return existingId;
+
+    const assignmentId = await writeNewAssignment(ctx, inputs);
+
+    if (args.enableAudit) {
+      await ctx.db.insert("auditLog", {
+        tenantId: args.tenantId,
+        timestamp: now,
+        action: "role_assigned",
+        userId: args.userId,
+        actorId: args.assignedBy,
+        details: {
+          role,
+          scope: args.scope,
+          customRoleId: args.customRoleId,
+          customRoleName: customRole.name,
+        },
+      });
+    }
+
+    return assignmentId;
+  },
+});
+
+/**
+ * Unified Custom Role Revocation
+ *
+ * Revokes a custom role assignment from a user. Looks up the customRoles row
+ * to obtain the snapshot permission list (so we know which `effectivePermissions`
+ * rows to scrub), then delegates to the shared revoke helper.
+ *
+ * Returns false if there was no matching assignment (idempotent). Throws
+ * `CUSTOM_ROLE_NOT_FOUND` only when the role row itself is missing — not when
+ * the user simply doesn't hold it.
+ */
+export const revokeCustomRoleUnified = mutation({
+  args: {
+    tenantId: v.string(),
+    userId: v.string(),
+    customRoleId: v.id("customRoles"),
+    scope: scopeValidator,
+    revokedBy: v.optional(v.string()),
+    enableAudit: v.optional(v.boolean()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    const customRole = await ctx.db.get(args.customRoleId);
+    if (customRole === null || customRole.tenantId !== args.tenantId) {
+      throw new ConvexError({
+        code: "CUSTOM_ROLE_NOT_FOUND",
+        message: "Custom role does not exist in this tenant",
+        customRoleId: args.customRoleId,
+      });
+    }
+
+    const role = `custom:${args.customRoleId}`;
+    const scopeKey = args.scope
+      ? `${args.scope.type}:${args.scope.id}`
+      : "global";
+
+    const revoked = await revokeAssignmentDualWrite(ctx, {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role,
+      rolePermissions: customRole.permissions,
+      scope: args.scope,
+      scopeKey,
+      now,
+    });
+
+    if (!revoked) return false;
+
+    if (args.enableAudit) {
+      await ctx.db.insert("auditLog", {
+        tenantId: args.tenantId,
+        timestamp: now,
+        action: "role_revoked",
+        userId: args.userId,
+        actorId: args.revokedBy,
+        details: {
+          role,
+          scope: args.scope,
+          customRoleId: args.customRoleId,
+          customRoleName: customRole.name,
+        },
+      });
+    }
+
     return true;
   },
 });
@@ -1155,6 +1433,10 @@ export const recomputeUser = mutation({
       .take(4000);
 
     // ── Step 4: Rebuild effectiveRoles and effectivePermissions ──────────
+    // Cache resolved custom role permissions to avoid repeated lookups when a
+    // user holds the same custom role in multiple scopes.
+    const customRolePermsCache = new Map<string, string[]>();
+
     for (const assignment of roleAssignments) {
       // Skip expired assignments
       if (assignment.expiresAt !== undefined && assignment.expiresAt < now) {
@@ -1178,8 +1460,26 @@ export const recomputeUser = mutation({
         updatedAt: now,
       });
 
-      // Look up permissions for this role from rolePermissionsMap
-      const permissions = args.rolePermissionsMap[assignment.role] ?? [];
+      // Look up permissions for this role. System roles come from the caller-
+      // supplied map. Custom roles ("custom:<id>") are resolved against the
+      // customRoles table directly so callers don't have to pre-build a map
+      // that includes every tenant's custom roles.
+      let permissions: string[];
+      if (assignment.role.startsWith("custom:")) {
+        if (customRolePermsCache.has(assignment.role)) {
+          permissions = customRolePermsCache.get(assignment.role)!;
+        } else {
+          const customRoleId = assignment.role.slice("custom:".length) as Id<"customRoles">;
+          const customRole = await ctx.db.get(customRoleId);
+          permissions =
+            customRole !== null && customRole.tenantId === args.tenantId
+              ? customRole.permissions
+              : [];
+          customRolePermsCache.set(assignment.role, permissions);
+        }
+      } else {
+        permissions = args.rolePermissionsMap[assignment.role] ?? [];
+      }
 
       for (const permission of permissions) {
         const classification = args.policyClassifications?.[permission] ?? null;
@@ -1418,184 +1718,34 @@ export const assignRolesUnified = mutation({
     let assigned = 0;
 
     for (const item of args.roles) {
-      // 1. Compute scopeKey
       const scopeKey = item.scope
         ? `${item.scope.type}:${item.scope.id}`
         : "global";
 
-      // 2. Check for duplicate in roleAssignments
-      const existing = await ctx.db
-        .query("roleAssignments")
-        .withIndex("by_tenant_user_and_role", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("role", item.role)
-        )
-        .take(100);
-
-      let isDuplicate = false;
-      for (const row of existing) {
-        if (scopeEquals(row.scope, item.scope) && !isExpired(row.expiresAt)) {
-          // Extend expiry: only update if new value is later or removes expiry entirely.
-          // Passing a shorter expiresAt is a no-op (prevents accidental expiry reduction).
-          // To shorten expiry, revoke and re-assign.
-          const shouldExtend = item.expiresAt === undefined ||
-            (row.expiresAt !== undefined && item.expiresAt > row.expiresAt);
-          if (shouldExtend && item.expiresAt !== row.expiresAt) {
-            const newExpiry = item.expiresAt;
-            // Update source table
-            await ctx.db.patch(row._id, { expiresAt: newExpiry });
-            // Update effectiveRoles
-            const effRole = await ctx.db
-              .query("effectiveRoles")
-              .withIndex("by_tenant_user_role_scope", (q) =>
-                q.eq("tenantId", args.tenantId)
-                  .eq("userId", args.userId)
-                  .eq("role", item.role)
-                  .eq("scopeKey", scopeKey)
-              )
-              .unique();
-            if (effRole) {
-              await ctx.db.patch(effRole._id, { expiresAt: newExpiry, updatedAt: now });
-            }
-            // Update effectivePermissions for this role's permissions
-            const permissions = args.rolePermissionsMap[item.role] ?? [];
-            for (const permission of permissions) {
-              const effPerm = await ctx.db
-                .query("effectivePermissions")
-                .withIndex("by_tenant_user_permission_scope", (q) =>
-                  q.eq("tenantId", args.tenantId)
-                    .eq("userId", args.userId)
-                    .eq("permission", permission)
-                    .eq("scopeKey", scopeKey)
-                )
-                .unique();
-              if (effPerm && effPerm.sources.includes(item.role)) {
-                const mergedExpiry = effPerm.expiresAt === undefined ? undefined
-                  : newExpiry === undefined ? undefined
-                  : Math.max(effPerm.expiresAt, newExpiry);
-                await ctx.db.patch(effPerm._id, { expiresAt: mergedExpiry, updatedAt: now });
-              }
-            }
-          }
-          isDuplicate = true;
-          break;
-        }
-      }
-
-      if (isDuplicate) {
-        continue;
-      }
-
-      // 3. Insert into roleAssignments (source of truth)
-      const assignmentId = await ctx.db.insert("roleAssignments", {
+      const inputs: AssignmentInputs = {
         tenantId: args.tenantId,
         userId: args.userId,
         role: item.role,
+        rolePermissions: args.rolePermissionsMap[item.role] ?? [],
         scope: item.scope,
+        scopeKey,
         expiresAt: item.expiresAt,
         assignedBy: args.assignedBy,
         metadata: item.metadata,
-      });
+        policyClassifications: args.policyClassifications,
+        now,
+      };
+
+      // Idempotent re-assign: extend the existing assignment's expiry if any.
+      const existingId = await tryExtendExistingAssignment(ctx, inputs);
+      if (existingId !== null) {
+        continue;
+      }
+
+      const assignmentId = await writeNewAssignment(ctx, inputs);
       assignmentIds.push(assignmentId as string);
       assigned++;
 
-      // 4. Upsert into effectiveRoles
-      const existingEffectiveRole = await ctx.db
-        .query("effectiveRoles")
-        .withIndex("by_tenant_user_role_scope", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("role", item.role)
-            .eq("scopeKey", scopeKey)
-        )
-        .unique();
-
-      if (existingEffectiveRole) {
-        await ctx.db.patch(existingEffectiveRole._id, {
-          assignedBy: args.assignedBy,
-          expiresAt: item.expiresAt,
-          updatedAt: now,
-        });
-      } else {
-        await ctx.db.insert("effectiveRoles", {
-          tenantId: args.tenantId,
-          userId: args.userId,
-          role: item.role,
-          scopeKey,
-          scope: item.scope,
-          assignedBy: args.assignedBy,
-          expiresAt: item.expiresAt,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-
-      // 5. Process each permission the role grants (from rolePermissionsMap)
-      const permissions = args.rolePermissionsMap[item.role] ?? [];
-      for (const permission of permissions) {
-        const classification = args.policyClassifications?.[permission] ?? null;
-
-        // Skip permissions where policy evaluated to "deny"
-        if (classification === "deny") {
-          continue;
-        }
-
-        const existingPerm = await ctx.db
-          .query("effectivePermissions")
-          .withIndex("by_tenant_user_permission_scope", (q) =>
-            q
-              .eq("tenantId", args.tenantId)
-              .eq("userId", args.userId)
-              .eq("permission", permission)
-              .eq("scopeKey", scopeKey)
-          )
-          .unique();
-
-        if (existingPerm) {
-          // Add role to sources if not already present
-          const sources = existingPerm.sources.includes(item.role)
-            ? existingPerm.sources
-            : [...existingPerm.sources, item.role];
-          const patchData: Record<string, unknown> = { sources, updatedAt: now };
-          if (classification === "deferred" && !existingPerm.policyResult) {
-            patchData.policyResult = "deferred";
-            patchData.policyName = permission;
-          } else if (classification === "allow" && !existingPerm.policyResult) {
-            patchData.policyResult = "allow";
-          }
-          // Compute merged expiresAt: no-expiry (undefined) wins over any expiry
-          const existingExpiry = existingPerm.expiresAt;
-          const newExpiry = item.expiresAt;
-          const mergedExpiresAt = existingExpiry === undefined || newExpiry === undefined
-            ? undefined
-            : Math.max(existingExpiry, newExpiry);
-          patchData.expiresAt = mergedExpiresAt;
-          await ctx.db.patch(existingPerm._id, patchData);
-        } else {
-          await ctx.db.insert("effectivePermissions", {
-            tenantId: args.tenantId,
-            userId: args.userId,
-            permission,
-            scopeKey,
-            scope: item.scope,
-            effect: "allow",
-            sources: [item.role],
-            expiresAt: item.expiresAt,
-            createdAt: now,
-            updatedAt: now,
-            ...(classification === "deferred"
-              ? { policyResult: "deferred", policyName: permission }
-              : classification === "allow"
-                ? { policyResult: "allow" }
-                : {}),
-          });
-        }
-      }
-
-      // 6. Audit log entry per role if enableAudit
       if (args.enableAudit) {
         await ctx.db.insert("auditLog", {
           tenantId: args.tenantId,
@@ -1648,83 +1798,23 @@ export const revokeRolesUnified = mutation({
     let revoked = 0;
 
     for (const item of args.roles) {
-      // 1. Compute scopeKey
       const scopeKey = item.scope
         ? `${item.scope.type}:${item.scope.id}`
         : "global";
 
-      // 2. Find the role assignment in roleAssignments
-      const assignments = await ctx.db
-        .query("roleAssignments")
-        .withIndex("by_tenant_user_and_role", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("role", item.role)
-        )
-        .take(100);
+      const wasRevoked = await revokeAssignmentDualWrite(ctx, {
+        tenantId: args.tenantId,
+        userId: args.userId,
+        role: item.role,
+        rolePermissions: args.rolePermissionsMap[item.role] ?? [],
+        scope: item.scope,
+        scopeKey,
+        now,
+      });
 
-      const assignment = assignments.find(
-        (row) => scopeEquals(row.scope, item.scope)
-      );
-
-      if (!assignment) {
-        continue;
-      }
-
-      // 3. Delete from roleAssignments
-      await ctx.db.delete(assignment._id);
+      if (!wasRevoked) continue;
       revoked++;
 
-      // 4. Delete from effectiveRoles
-      const effectiveRole = await ctx.db
-        .query("effectiveRoles")
-        .withIndex("by_tenant_user_role_scope", (q) =>
-          q
-            .eq("tenantId", args.tenantId)
-            .eq("userId", args.userId)
-            .eq("role", item.role)
-            .eq("scopeKey", scopeKey)
-        )
-        .unique();
-
-      if (effectiveRole) {
-        await ctx.db.delete(effectiveRole._id);
-      }
-
-      // 5. For each permission the role grants, update effectivePermissions
-      const permissions = args.rolePermissionsMap[item.role] ?? [];
-      for (const permission of permissions) {
-        const effectivePerm = await ctx.db
-          .query("effectivePermissions")
-          .withIndex("by_tenant_user_permission_scope", (q) =>
-            q
-              .eq("tenantId", args.tenantId)
-              .eq("userId", args.userId)
-              .eq("permission", permission)
-              .eq("scopeKey", scopeKey)
-          )
-          .unique();
-
-        if (!effectivePerm) continue;
-
-        const updatedSources = effectivePerm.sources.filter(
-          (s) => s !== item.role
-        );
-
-        if (updatedSources.length === 0 && !effectivePerm.directGrant && !effectivePerm.directDeny) {
-          // No more sources, no direct grant, no direct deny — delete the row
-          await ctx.db.delete(effectivePerm._id);
-        } else if (updatedSources.length !== effectivePerm.sources.length) {
-          // Role was in sources; patch with updated array
-          await ctx.db.patch(effectivePerm._id, {
-            sources: updatedSources,
-            updatedAt: now,
-          });
-        }
-      }
-
-      // 6. Audit log if enableAudit
       if (args.enableAudit) {
         await ctx.db.insert("auditLog", {
           tenantId: args.tenantId,

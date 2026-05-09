@@ -4,10 +4,16 @@
  * These functions provide data for the frontend dashboard.
  */
 
-import { mutation, query } from "./_generated/server.js";
+import { mutation, query, action } from "./_generated/server.js";
 import { components } from "./_generated/api.js";
-import { Authz, definePermissions, defineRoles } from "@djpanda/convex-authz";
+import {
+  Authz,
+  definePermissions,
+  defineRoles,
+  type CustomRoleId,
+} from "@djpanda/convex-authz";
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { DEMO_ROLES } from "./constants.js";
 
 // Define permissions and roles
@@ -39,7 +45,30 @@ const roles = defineRoles(permissions, {
   },
 });
 
-const authz = new Authz(components.authz, { permissions, roles, tenantId: "example" });
+// Whitelist of permissions that tenant admins are allowed to compose into
+// custom roles. The SaaS provider owns this list — typing it `as const` makes
+// each entry participate in the PermissionArg<P> type, so typos are caught
+// at compile time. `documents:delete` is intentionally excluded to demonstrate
+// that tenant admins cannot escalate beyond what the provider permits.
+const CUSTOM_ROLE_GRANTABLE_PERMISSIONS = [
+  "documents:create",
+  "documents:read",
+  "documents:update",
+  "settings:view",
+  "users:invite",
+  "billing:view",
+] as const;
+
+const authz = new Authz(components.authz, {
+  permissions,
+  roles,
+  tenantId: "example",
+  customRoles: {
+    enabled: true,
+    grantablePermissions: CUSTOM_ROLE_GRANTABLE_PERMISSIONS,
+    maxRolesPerTenant: 50,
+  },
+});
 
 // ============================================================================
 // Queries
@@ -360,6 +389,155 @@ export const denyPermission = mutation({
       String(args.userId),
       args.permission as any,
       scope
+    );
+  },
+});
+
+// ============================================================================
+// Custom Roles (issue #31) — tenant admins compose roles at runtime
+// ============================================================================
+
+/** The whitelist exposed to the UI so it can render which permissions are grantable. */
+export const getCustomRoleGrantablePermissions = query({
+  args: {},
+  returns: v.array(v.string()),
+  handler: async () => {
+    return [...CUSTOM_ROLE_GRANTABLE_PERMISSIONS];
+  },
+});
+
+export const listCustomRoles = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.string(),
+      name: v.string(),
+      description: v.optional(v.string()),
+      permissions: v.array(v.string()),
+      createdBy: v.string(),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const result = await authz.listCustomRoles(ctx, {
+      numItems: 100,
+      cursor: null,
+    });
+    return result.page.map((r) => ({
+      _id: r._id,
+      name: r.name,
+      description: r.description,
+      permissions: r.permissions,
+      createdBy: r.createdBy,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  },
+});
+
+export const createCustomRole = mutation({
+  args: {
+    name: v.string(),
+    permissions: v.array(v.string()),
+    description: v.optional(v.string()),
+    createdBy: v.id("users"),
+  },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    return await authz.createCustomRole(ctx, {
+      name: args.name,
+      permissions: args.permissions as Array<
+        (typeof CUSTOM_ROLE_GRANTABLE_PERMISSIONS)[number]
+      >,
+      description: args.description,
+      createdBy: String(args.createdBy),
+    });
+  },
+});
+
+export const updateCustomRole = action({
+  args: {
+    customRoleId: v.string(),
+    name: v.optional(v.string()),
+    permissions: v.optional(v.array(v.string())),
+    description: v.optional(v.string()),
+    actorId: v.optional(v.id("users")),
+  },
+  returns: v.object({
+    permissionsChanged: v.boolean(),
+    usersRecomputed: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    return await authz.updateCustomRole(ctx, {
+      customRoleId: args.customRoleId as CustomRoleId,
+      name: args.name,
+      permissions: args.permissions as
+        | Array<(typeof CUSTOM_ROLE_GRANTABLE_PERMISSIONS)[number]>
+        | undefined,
+      description: args.description,
+      actorId: args.actorId ? String(args.actorId) : undefined,
+    });
+  },
+});
+
+export const deleteCustomRole = mutation({
+  args: {
+    customRoleId: v.string(),
+    force: v.optional(v.boolean()),
+  },
+  returns: v.object({
+    deleted: v.boolean(),
+    assignmentsRevoked: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const result = await authz.deleteCustomRole(ctx, {
+      customRoleId: args.customRoleId as CustomRoleId,
+      force: args.force,
+    });
+    return {
+      deleted: result.deleted,
+      assignmentsRevoked: result.assignmentsRevoked,
+    };
+  },
+});
+
+export const assignCustomRole = mutation({
+  args: {
+    userId: v.id("users"),
+    customRoleId: v.string(),
+    orgId: v.optional(v.id("orgs")),
+  },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const scope = args.orgId
+      ? { type: "org", id: String(args.orgId) }
+      : undefined;
+    return await authz.assignCustomRole(
+      ctx,
+      String(args.userId),
+      args.customRoleId as CustomRoleId,
+      scope,
+    );
+  },
+});
+
+export const revokeCustomRole = mutation({
+  args: {
+    userId: v.id("users"),
+    customRoleId: v.string(),
+    orgId: v.optional(v.id("orgs")),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const scope = args.orgId
+      ? { type: "org", id: String(args.orgId) }
+      : undefined;
+    return await authz.revokeCustomRole(
+      ctx,
+      String(args.userId),
+      args.customRoleId as CustomRoleId,
+      scope,
     );
   },
 });

@@ -123,3 +123,118 @@ describe("Type-safe permission strings", () => {
     expect(true).toBe(true);
   });
 });
+
+// ============================================================================
+// Type-safety invariants for tenant-defined custom roles (issue #31)
+// ============================================================================
+
+describe("Custom roles: branded CustomRoleId cannot be confused with strings", () => {
+  test("CustomRoleId is structurally distinct from raw string", () => {
+    // Compile-time only — verifies that a raw string cannot be passed where
+    // CustomRoleId is expected without an explicit cast. Runtime branded
+    // types in TypeScript guard against accidental coercion.
+    type AssignArg = Parameters<
+      Authz<P, never, never>["assignCustomRole"]
+    >[2];
+
+    // Valid: explicit cast through the branded type (this is what
+    // createCustomRole returns).
+    const _valid: AssignArg = "k1234567890" as unknown as AssignArg;
+
+    // @ts-expect-error — raw string cannot satisfy the branded CustomRoleId
+    const _bad: AssignArg = "raw_string";
+    void _bad;
+
+    expect(true).toBe(true);
+  });
+
+  test("CustomRoleId from one tenant cannot be confused with system role names", () => {
+    // System role names are typed as `keyof R & string`. Custom role ids are
+    // typed as `Id<"customRoles">`. They are structurally disjoint at the
+    // type level, so the wrong one in the wrong slot is caught.
+    type TestAuthz = Authz<
+      P,
+      { admin: { documents: ["read"] }; viewer: { documents: ["read"] } }
+    >;
+
+    // assignRole takes a system role name (keyof R & string)
+    type AssignRoleArg = Parameters<TestAuthz["assignRole"]>[2];
+    const _validRole: AssignRoleArg = "admin";
+    // @ts-expect-error — random string isn't in the role definition
+    const _badRole: AssignRoleArg = "k1234";
+    void _badRole;
+
+    expect(true).toBe(true);
+  });
+});
+
+describe("Custom roles: grantablePermissions whitelist is type-checked", () => {
+  test("non-existent permission strings are rejected in grantablePermissions", () => {
+    // The customRoles config's grantablePermissions is typed as
+    // ReadonlyArray<PermissionArg<P>>, so typos in the whitelist itself
+    // are caught at compile time — the SaaS provider can't accidentally
+    // widen the security boundary by typo.
+    type Options = ConstructorParameters<typeof Authz<P, never, never>>[1];
+    type CustomRolesConfig = NonNullable<Options["customRoles"]>;
+    type Whitelist = CustomRolesConfig["grantablePermissions"];
+
+    // Valid: real permissions
+    const _ok: Whitelist = ["documents:read", "settings:view"];
+
+    // @ts-expect-error — typo: "documets" instead of "documents"
+    const _bad: Whitelist = ["documets:read"];
+    void _bad;
+
+    // @ts-expect-error — non-existent action
+    const _bad2: Whitelist = ["documents:fly"];
+    void _bad2;
+
+    expect(true).toBe(true);
+  });
+
+  test("createCustomRole permissions arg is constrained to PermissionArg<P>", () => {
+    type CreateArg = Parameters<
+      Authz<P, never, never>["createCustomRole"]
+    >[1];
+    type PermsField = CreateArg["permissions"];
+
+    // Valid: typed permission strings
+    const _ok: PermsField = ["documents:read"] as const;
+
+    // @ts-expect-error — typo
+    const _bad: PermsField = ["documets:read"] as const;
+    void _bad;
+
+    expect(true).toBe(true);
+  });
+});
+
+describe("Custom roles: existing permission/role typing is preserved", () => {
+  test("assignRole still rejects unknown system role names (issue #23 invariant)", () => {
+    // Critical regression check: adding the customRoles feature must not
+    // weaken the static type-safety win from issue #23 — `keyof R & string`
+    // is still the type of the `role` parameter for system-role assignment.
+    type TestAuthz = Authz<
+      P,
+      { admin: { documents: ["read"] }; viewer: { documents: ["read"] } }
+    >;
+    type AssignArg = Parameters<TestAuthz["assignRole"]>[2];
+    const _ok: AssignArg = "admin";
+    // @ts-expect-error — typo in role name
+    const _bad: AssignArg = "admni";
+    void _bad;
+
+    expect(true).toBe(true);
+  });
+
+  test("can() still rejects typo'd permissions (issue #23 invariant)", () => {
+    type TestAuthz = Authz<P, never, never>;
+    type CanArg = Parameters<TestAuthz["can"]>[2];
+    const _ok: CanArg = "documents:read";
+    // @ts-expect-error — typo
+    const _bad: CanArg = "documets:read";
+    void _bad;
+
+    expect(true).toBe(true);
+  });
+});

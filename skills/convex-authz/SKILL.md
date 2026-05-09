@@ -543,6 +543,88 @@ const roles = await authz.getUserRoles(ctx, userId);
 // Returns: [{ role: "admin", scopeKey: "global" }, { role: "editor", scopeKey: "team:123", scope: { type: "team", id: "123" } }]
 ```
 
+### Custom roles (tenant-defined, opt-in)
+
+For B2B SaaS apps where tenant admins need to define their own role bundles
+(e.g. "Senior Editor", "Approver", "Outside Counsel"), enable the `customRoles`
+option on the `Authz` constructor. Tenants compose roles from a SaaS-provider-
+defined whitelist of permissions — they cannot invent new permission strings
+at runtime, which keeps the type-safety win above intact and prevents
+permission-escalation footguns.
+
+#### Configure the whitelist
+
+```typescript
+const authz = new Authz(components.authz, {
+  permissions,
+  roles,
+  tenantId: "tenant-acme",
+  customRoles: {
+    enabled: true,
+    grantablePermissions: [
+      "documents:read",
+      "documents:update",
+      "documents:delete",
+      "settings:view",
+    ] as const,                  // typed against PermissionArg<P> — typos rejected at compile time
+    maxRolesPerTenant: 50,        // optional, default 100
+  },
+});
+```
+
+#### Lifecycle
+
+```typescript
+// Tenant admin creates a custom role
+const roleId = await authz.createCustomRole(ctx, {
+  name: "Senior Editor",
+  permissions: ["documents:read", "documents:update"],
+  description: "Can edit but not delete",
+  createdBy: currentUserId,
+});
+
+// Assign / revoke (same shape as system roles, but with the branded id)
+await authz.assignCustomRole(ctx, userId, roleId);
+await authz.revokeCustomRole(ctx, userId, roleId);
+
+// Permission checks are unchanged — `can()` doesn't care where a permission came from
+const canEdit = await authz.can(ctx, userId, "documents:update");
+
+// Update propagates to every assigned user via recomputeUser
+const result = await authz.updateCustomRole(ctx, {
+  customRoleId: roleId,
+  permissions: ["documents:read", "documents:update", "documents:delete"],
+});
+// → { permissionsChanged: true, usersRecomputed: 17 }
+
+// List / lookup
+const page = await authz.listCustomRoles(ctx, { numItems: 50, cursor: null });
+const role = await authz.getCustomRole(ctx, roleId);
+const byName = await authz.getCustomRoleByName(ctx, "Senior Editor");
+
+// Delete (refuses if any user holds the role unless `force: true`)
+await authz.deleteCustomRole(ctx, { customRoleId: roleId, force: true });
+```
+
+#### Design decisions worth knowing
+
+- **Composition only, never new permissions.** Tenant admins compose existing
+  permissions; the whitelist enforced at create/update time is the security
+  boundary.
+- **Branded `CustomRoleId`.** Cannot be confused with system role names
+  (`keyof R`) or with raw strings at compile time.
+- **Snapshot semantics from system roles.** A custom role's `permissions[]`
+  is a snapshot at create time. If the SaaS provider later updates a system
+  role definition, custom roles built around the old set do not auto-update —
+  preventing surprise breakage on redeploy.
+- **Cascade on definition update.** When a tenant admin edits a custom role's
+  permissions, every user holding it is re-materialized via `recomputeUser`.
+  Direct grants and direct denies on each user are preserved.
+- **Permission-check hot path is unchanged.** `can()` reads `effectivePermissions`
+  identically — custom-role-derived rows are indistinguishable from system-role-
+  derived rows. Zero performance impact for permission checks regardless of
+  whether the feature is enabled.
+
 ---
 
 ## Bulk operations and offboarding
