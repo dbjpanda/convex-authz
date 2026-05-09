@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { useCanUser, PermissionGate } from "@djpanda/convex-authz/react";
 import {
@@ -11,7 +11,16 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, XCircle, Shield, User, Building2 } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  Shield,
+  User,
+  Building2,
+  Plus,
+  Ban,
+  Eraser,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Id } from "@convex/_generated/dataModel";
 
@@ -311,6 +320,14 @@ export function PermissionTesterPage() {
         </Card>
       )}
 
+      {/* Overrides panel — exercises grant / deny / removeOverride */}
+      {selectedUserId && (
+        <OverridesPanel
+          userId={selectedUserId}
+          orgId={selectedOrgId}
+        />
+      )}
+
       {/* Empty State */}
       {!selectedUserId && (
         <Card className="border-dashed">
@@ -322,5 +339,115 @@ export function PermissionTesterPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+interface OverridesPanelProps {
+  userId: Id<"users">;
+  orgId: Id<"orgs"> | null;
+}
+
+/**
+ * Demonstrates the override lifecycle: grant a permission directly, deny one
+ * even if the user has it via role, and remove either kind of override. This
+ * showcases the symmetric `removeOverride` API. The grid above this panel
+ * uses Convex's reactive queries, so each click visibly flips the relevant
+ * permission's allow/deny state in real time.
+ */
+function OverridesPanel({ userId, orgId }: OverridesPanelProps) {
+  const [permission, setPermission] = useState<string>("documents:delete");
+  const [lastAction, setLastAction] = useState<string | null>(null);
+
+  const grant = useMutation(api.app.grantPermission);
+  const deny = useMutation(api.app.denyPermission);
+  const remove = useMutation(api.app.removeOverride);
+
+  const orgArg = orgId ?? undefined;
+
+  const handleGrant = async () => {
+    await grant({ userId, permission, orgId: orgArg });
+    setLastAction(`Granted ${permission}`);
+  };
+  const handleDeny = async () => {
+    await deny({ userId, permission, orgId: orgArg });
+    setLastAction(`Denied ${permission}`);
+  };
+  const handleRemove = async () => {
+    const removed = await remove({ userId, permission, orgId: orgArg });
+    setLastAction(
+      removed
+        ? `Override removed for ${permission}`
+        : `No override existed for ${permission}`,
+    );
+  };
+
+  return (
+    <Card data-testid="overrides-panel">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Eraser className="size-4" />
+          Permission Overrides
+        </CardTitle>
+        <CardDescription>
+          Pick a permission, then try{" "}
+          <code className="text-xs">grantPermission</code>,{" "}
+          <code className="text-xs">denyPermission</code>, and{" "}
+          <code className="text-xs">removeOverride</code>. Watch the row
+          above react in real time.{" "}
+          <strong>
+            grant and deny are NOT inverses — they upsert the same row's
+            effect; removeOverride is the only way to delete the row and
+            restore role-derived access.
+          </strong>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <label className="text-xs text-muted-foreground mb-2 block">
+            Permission
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {PERMISSIONS.map((p) => (
+              <Button
+                key={p}
+                size="sm"
+                variant={permission === p ? "default" : "outline"}
+                onClick={() => {
+                  setPermission(p);
+                  setLastAction(null);
+                }}
+                data-testid={`override-perm-${p}`}
+              >
+                {p}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={handleGrant} data-testid="override-grant">
+            <Plus className="size-4 mr-2" />
+            Grant
+          </Button>
+          <Button onClick={handleDeny} variant="secondary" data-testid="override-deny">
+            <Ban className="size-4 mr-2" />
+            Deny
+          </Button>
+          <Button onClick={handleRemove} variant="outline" data-testid="override-remove">
+            <Eraser className="size-4 mr-2" />
+            Remove override
+          </Button>
+        </div>
+
+        {lastAction && (
+          <div
+            className="text-sm text-muted-foreground"
+            data-testid="override-last-action"
+          >
+            Last action: {lastAction}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
