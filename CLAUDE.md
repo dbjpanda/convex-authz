@@ -33,7 +33,7 @@ One `Authz` class provides O(1) reads, ABAC policy support, and ReBAC — all in
 
 **Dual-layer design:** Source tables store ground truth; effective tables store pre-computed O(1) lookups. All writes go to BOTH layers via `unified.ts` mutations.
 
-- **Source tables**: `roleAssignments`, `userAttributes`, `permissionOverrides`, `relationships`, `auditLog`
+- **Source tables**: `roleAssignments`, `userAttributes`, `permissionOverrides`, `relationships`, `customRoles`, `auditLog`
 - **Effective tables**: `effectivePermissions`, `effectiveRoles`, `effectiveRelationships`
 
 **Permission check (`can()`) tiered resolution:**
@@ -53,15 +53,16 @@ Scope (`{ type: string; id: string }`) enables resource-level permissions. A rol
 
 ### Key File Map
 
-- `src/component/schema.ts` — 8 tables with all indexes
-- `src/component/unified.ts` — **v2 core**: tiered checkPermission query + dual-write mutations (assignRoleUnified, revokeRoleUnified, grantPermissionUnified, denyPermissionUnified, addRelationUnified, removeRelationUnified, setAttributeWithRecompute, recomputeUser)
+- `src/component/schema.ts` — 9 tables with all indexes
+- `src/component/unified.ts` — **v2 core**: tiered checkPermission query + dual-write mutations (assignRoleUnified, revokeRoleUnified, assignCustomRoleUnified, revokeCustomRoleUnified, grantPermissionUnified, denyPermissionUnified, addRelationUnified, removeRelationUnified, setAttributeWithRecompute, recomputeUser). Helpers `tryExtendExistingAssignment`, `writeNewAssignment`, `revokeAssignmentDualWrite` are private and shared by both system-role and custom-role mutation paths. `recomputeUser` resolves `custom:<id>` roles against `customRoles` automatically — callers don't need to pre-build a custom-role map.
+- `src/component/customRoles.ts` — **v2.4**: tenant-scoped custom role catalog (createCustomRole, updateCustomRoleDefinition + updateCustomRoleAction for cascade fan-out, deleteCustomRole, listCustomRoles, getCustomRole, getCustomRoleByName, getCustomRolePermissions, countCustomRoles). `customRoleStringFromId(id)` produces the namespaced `"custom:<id>"` string stored in roleAssignments.
 - `src/component/mutations.ts` — source-table mutations (offboardUser, deprovisionUser, cleanup, audit)
 - `src/component/queries.ts` — read queries (getUserRoles, hasRole, getUserAttributes, getAuditLog). `checkPermission`/`checkPermissions` are now internal.
 - `src/component/indexed.ts` — O(1) read queries (checkPermissionFast, hasRoleFast, hasRelationFast, getUserPermissionsFast, getUserRolesFast). Write mutations are now internal.
 - `src/component/rebac.ts` — relationship traversal (checkRelationWithTraversal, listAccessibleObjects, listUsersWithAccess)
 - `src/component/helpers.ts` — `matchesPermissionPattern`, scope matching, policy context
-- `src/client/index.ts` — unified `Authz` class + `definePermissions`, `defineRoles`, `definePolicies`, `defineTraversalRules`, `defineRelationPermissions`, `defineCaveats` helpers. `IndexedAuthz` is a deprecated alias.
-- `src/client/validation.ts` — input validation for client methods
+- `src/client/index.ts` — unified `Authz` class + `definePermissions`, `defineRoles`, `definePolicies`, `defineTraversalRules`, `defineRelationPermissions`, `defineCaveats` helpers. v2.4 adds `CustomRoleId` (branded `Id<"customRoles">`), `CustomRolesConfig<P>`, and 8 new methods on `Authz` (createCustomRole, updateCustomRole, deleteCustomRole, listCustomRoles, getCustomRole, getCustomRoleByName, assignCustomRole, revokeCustomRole). `IndexedAuthz` is a deprecated alias.
+- `src/client/validation.ts` — input validation for client methods (incl. validateCustomRoleId, validateCustomRoleName, validateGrantablePermissions, validateCustomRolePermissions)
 - `src/react/index.ts` — `AuthzProvider`, `useCanUser`, `useUserRoles`, `PermissionGate`
 
 ### Package Exports
@@ -78,6 +79,17 @@ Scope (`{ type: string; id: string }`) enables resource-level permissions. A rol
 
 Permission strings support patterns: `"*"` (all), `"resource:*"` (all actions on resource), `"*:action"` (action on all resources). Matching happens in `matchesPermissionPattern()`.
 
+### Custom Roles (v2.4, opt-in)
+
+Tenant admins can define their own role bundles at runtime, composed only from a SaaS-provider-supplied `grantablePermissions` whitelist. Storage convention: custom roles are stored in `customRoles` (tenant-scoped) and the role string in `roleAssignments`/`effectiveRoles` is the namespaced form `"custom:<id>"`. Read-path queries (`hasRoleFast`, `checkPermissionFast`) treat them identically to system roles — no branching, no extra reads on the hot path.
+
+**Three load-bearing decisions:**
+- **Composition only.** Tenant admins compose existing permissions; they never invent new strings. `grantablePermissions` is enforced at create/update time.
+- **Custom-role-from-system snapshot.** Custom role `permissions[]` is a snapshot at create time. Updating a system role definition does not auto-update custom roles built on it (prevents redeploy-breaks-tenant footgun).
+- **Custom-role-update cascade.** When a tenant admin edits a custom role, all assigned users are recomputed via `recomputeUser` (`updateCustomRoleAction`, mirrors `syncRoleAction`). No-op edits skip the fan-out.
+
+The feature is fully opt-in: omitting `customRoles` from the `Authz` constructor leaves the existing API surface and behavior untouched.
+
 ## Test Pattern
 
 Tests use `convex-test`:
@@ -92,7 +104,7 @@ await t.mutation(api.mutations.assignRole, { userId, role, ... });
 const result = await t.query(api.queries.hasRole, { userId, role, ... });
 ```
 
-Each test gets a fresh database. Test files: `authz.test.ts`, `queries.test.ts`, `indexed.test.ts`, `rebac.test.ts`, `scenarios.test.ts`, `helpers.test.ts`, `unified.test.ts`, `unified-e2e.test.ts`, `tenant-isolation.test.ts`, `client/index.test.ts`, `react/index.test.ts`.
+Each test gets a fresh database. Test files: `authz.test.ts`, `queries.test.ts`, `indexed.test.ts`, `rebac.test.ts`, `scenarios.test.ts`, `helpers.test.ts`, `unified.test.ts`, `unified-e2e.test.ts`, `tenant-isolation.test.ts`, `customRoles.test.ts`, `customRoleAssignment.test.ts`, `customRoleCascade.test.ts`, `issue-31-custom-roles.test.ts`, `client/index.test.ts`, `client/customRoles.test.ts`, `react/index.test.ts`.
 
 After creating new `.ts` files in `src/component/`, run `npm run build:codegen` to regenerate `_generated/api.ts`.
 

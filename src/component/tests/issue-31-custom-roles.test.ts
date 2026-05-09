@@ -397,14 +397,18 @@ describe("issue #31 — custom roles end-to-end", () => {
     // Walk to the end of tenant A's pages — total should be 12
     let cursor: string | null = pageA1.continueCursor;
     let total = pageA1.page.length;
-    while (true) {
-      const next = await t.query(api.customRoles.listCustomRoles, {
-        tenantId: TENANT_A,
-        paginationOpts: { numItems: 5, cursor },
-      });
+    let isDone = pageA1.isDone;
+    while (!isDone) {
+      const next: typeof pageA1 = await t.query(
+        api.customRoles.listCustomRoles,
+        {
+          tenantId: TENANT_A,
+          paginationOpts: { numItems: 5, cursor },
+        },
+      );
       total += next.page.length;
       for (const row of next.page) expect(row.tenantId).toBe(TENANT_A);
-      if (next.isDone) break;
+      isDone = next.isDone;
       cursor = next.continueCursor;
     }
     expect(total).toBe(12);
