@@ -197,7 +197,7 @@ v2 consolidates everything into a single `Authz` class. If you previously used `
 - **ABAC policy types**: Policies accept a `type` field (`"static"` or `"deferred"`). In the current implementation, both types are evaluated at read-time when `can()` is called — Convex mutations cannot call queries, so write-time evaluation is not possible. The `type` field is reserved for future optimization but currently has no behavioral difference.
 - `**canWithContext()`**: Check deferred ABAC policies that need runtime context (e.g. IP address, time of day).
 - `**recomputeUser()**`: Rebuild a user's effective-permissions table on demand — useful after a schema change or post-deploy migration.
-- `**withTenant()**`: Get a scoped copy of the client bound to a different tenant for cross-tenant admin operations.
+- `**withTenant()**`: Return a scoped copy of the client bound to a specific tenantId. This is the primary tenant-routing primitive when a single `Authz` is shared across tenants (e.g. a module-scope instance in an integration package) — call it on every operation that targets a particular tenant. Also covers cross-tenant admin operations.
 
 ### ReBAC example
 
@@ -1341,15 +1341,37 @@ const authz = new Authz(components.authz, {
 });
 ```
 
-### Cross-tenant operations
+### Routing operations to a specific tenant
 
-For rare admin operations that need to access a different tenant's data, use the `withTenant()` method:
+`withTenant(tenantId)` returns a new `Authz` instance bound to a different tenant. Two patterns are supported:
 
-```typescript
-// Returns a new Authz instance scoped to a different tenant
-const otherTenant = authz.withTenant("other-org-id");
-await otherTenant.getUserRoles(ctx, userId);
-```
+1. **Per-request construction** — simplest when each handler always knows its tenant:
+
+   ```typescript
+   function makeAuthz(tenantId: string) {
+     return new Authz(components.authz, { permissions, roles, tenantId });
+   }
+   // Inside a handler:
+   const authz = makeAuthz(args.tenantId);
+   await authz.assignRole(ctx, userId, "editor", scope);
+   ```
+
+2. **Module-scope instance + `withTenant(tenantId)` per call** — best for shared abstractions and integration packages (e.g. `@djpanda/convex-tenants`) that hold one `Authz` reference and route per request:
+
+   ```typescript
+   // Module scope:
+   export const authz = new Authz(components.authz, {
+     permissions, roles,
+     tenantId: "deployment-default", // any constant; `withTenant` overrides it per call
+   });
+
+   // In each handler:
+   await authz.withTenant(orgId).assignRole(ctx, userId, "editor", scope);
+   ```
+
+   The constructor's `tenantId` still governs operations that don't go through `withTenant()` — typically pre-org operations (e.g. gating `createOrganization`) or platform-level admin checks where no organization context exists yet.
+
+`withTenant` also covers the rarer cross-tenant admin case where a single handler legitimately reads or writes another tenant's data.
 
 ### Compliance
 

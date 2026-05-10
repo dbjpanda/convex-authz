@@ -1345,6 +1345,8 @@ const authz = new Authz(components.authz, {
    await authz.withTenant(orgId).assignRole(ctx, userId, "editor", scope);
    ```
 
+   The constructor's `tenantId` still governs operations that don't go through `withTenant()` — typically pre-org operations (e.g. gating `createOrganization`) or platform-level admin checks where no organization context exists yet.
+
 `withTenant` also covers the rarer cross-tenant admin case where a single handler legitimately reads or writes another tenant's data.
 
 ### Compliance
