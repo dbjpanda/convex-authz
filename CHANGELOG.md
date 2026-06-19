@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.1](https://github.com/dbjpanda/convex-authz/compare/v2.4.0...v2.4.1) (2026-05-10)
+
+
+### Documentation
+
+* **README:** clarify withTenant() is the primary multi-tenant routing primitive ([#48](https://github.com/dbjpanda/convex-authz/issues/48)) ([9aa89f6](https://github.com/dbjpanda/convex-authz/commit/9aa89f60f2d655a693647fb47896c7a331673840))
+
 ## [2.4.0](https://github.com/dbjpanda/convex-authz/compare/v2.3.2...v2.4.0) (2026-05-09)
 
 
